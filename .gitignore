@@ -1,0 +1,8 @@
+# NUNCA subir secretos ni datos locales
+.streamlit/secrets.toml
+*.env
+.env
+venv/
+__pycache__/
+*.pyc
+.plan_estado.json
