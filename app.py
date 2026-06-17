@@ -633,4 +633,1280 @@ def features_atleta(acts, zonas, fitness, perfil_row, sexo='M'):
     if acts is not None and not acts.empty:
         cols = set(acts.columns)
         runs = acts[acts['sport'] == 'RUNNING'] if 'sport' in cols else acts.iloc[0:0]
-        cyc = acts[acts['sport'] == 'CYCLING'] if 'sport' in cols else acts.iloc[
+        cyc = acts[acts['sport'] == 'CYCLING'] if 'sport' in cols else acts.iloc[0:0]
+        swm = acts[acts['sport'] == 'SWIMMING'] if 'sport' in cols else acts.iloc[0:0]
+        if 'avg_speed_kmh' in cols:
+            if not runs.empty:
+                f['pace_run_kmh'] = runs['avg_speed_kmh'].median()
+                f['pace_running_kmh'] = f['pace_run_kmh']
+                f['running_speed_kmh'] = f['pace_run_kmh']   # nombre usado por el modelo real
+            if not cyc.empty:
+                f['pace_cycling_kmh'] = cyc['avg_speed_kmh'].median()
+            if not swm.empty:
+                f['swim_speed_kmh'] = swm['avg_speed_kmh'].median()
+        if 'avg_hr' in cols:
+            f['avg_hr'] = acts['avg_hr'].mean()
+            if not runs.empty:
+                f['avg_hr_run'] = runs['avg_hr'].mean()
+                f['fc_umbral_run'] = runs['avg_hr'].quantile(0.85)
+            if not cyc.empty:
+                f['fc_umbral_cyc'] = cyc['avg_hr'].quantile(0.85)
+        if 'avg_cadence' in cols:
+            f['avg_cadence'] = acts['avg_cadence'].mean()
+        if 'moving_time' in cols:
+            tmp = acts.dropna(subset=['moving_time']).copy()
+
+            def _tr(r):
+                hr, dur = r.get('avg_hr'), r.get('moving_time')
+                if pd.isna(dur) or dur <= 0:
+                    return 0.0
+                ratio = 0.65 if pd.isna(hr) else float(np.clip((hr - fc_rep) / fcr, 0.1, 1.0))
+                return float(dur) * ratio * coef_trimp * float(np.exp(k_trimp * ratio))
+
+            tmp['trimp'] = tmp.apply(_tr, axis=1)
+            f['training_load'] = tmp['trimp'].mean()
+            if 'date' in cols:
+                d = pd.to_datetime(acts['date'], utc=True, errors='coerce').dropna()
+                wk = max((d.max() - d.min()).days / 7.0, 1.0) if len(d) > 1 else 1.0
+            else:
+                wk = max(len(acts) / 3.0, 1.0)
+            f['weekly_trimp'] = tmp['trimp'].sum() / wk
+            f['sessions_per_week'] = len(acts) / wk
+            if 'avg_hr' in cols:
+                a = acts.dropna(subset=['avg_hr']).copy()
+                if not a.empty:
+                    w = a['moving_time'].fillna(1.0).clip(lower=1.0)
+                    tot = w.sum()
+                    if tot > 0:
+                        f['pct_z12'] = float(w[a['avg_hr'] <= zonas['hr']['Z2'][1]].sum() / tot * 100)
+                        f['pct_z45'] = float(w[a['avg_hr'] >= zonas['hr']['Z4'][0]].sum() / tot * 100)
+
+    if fitness is not None and not fitness.empty and {'CTL', 'TSB'} <= set(fitness.columns):
+        f['ctl_current'] = float(fitness['CTL'].iloc[-1])
+        f['tsb_current'] = float(fitness['TSB'].iloc[-1])
+        f['ctl_cycling'] = f['ctl_current']
+    return f
+
+
+def inferir_con_modelos(modelos, feats):
+    """Aplica los modelos entrenados al vector de características."""
+    out = {}
+    pp = modelos['pp']
+    try:
+        fc = pp.get('feature_cols', [])
+        if fc:
+            row = np.array([[feats.get(c, np.nan) for c in fc]], dtype=float)
+            out['bici_pred_kmh'] = float(modelos['run2cyc'].predict(row)[0])
+    except Exception:
+        pass
+    try:
+        fr = pp.get('feat_cyc2run', [])
+        if fr:
+            row = np.array([[feats.get(c, np.nan) for c in fr]], dtype=float)
+            out['run_pred_kmh'] = float(modelos['cyc2run'].predict(row)[0])
+    except Exception:
+        pass
+    try:
+        cf = pp.get('cluster_features', [])
+        if cf:
+            row = np.array([[feats.get(c, np.nan) for c in cf]], dtype=float)
+            row = pp['imputer'].transform(row)
+            row = pp['scaler'].transform(row)
+            cl = int(modelos['kmeans'].predict(row)[0])
+            names = pp.get('profile_names', {})
+            out['cluster'] = cl
+            out['perfil_nombre'] = names.get(cl) or names.get(cl % 4) or f'Perfil {cl}'
+    except Exception:
+        pass
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Motor (réplica ligera del notebook, secciones 7-8)
+# ----------------------------------------------------------------------------
+def calcular_zonas(perfil_row, acts, perfil_tipo='nuevo', pred_bici=np.nan):
+    p = perfil_row
+    fc_max = np.nan
+    if not acts.empty and 'max_hr' in acts.columns:
+        fc_max = acts['max_hr'].dropna().quantile(0.98)
+    if pd.isna(fc_max):
+        fc_max = 185.0
+    fc_rep = p.get('resting_hr', np.nan)
+    if pd.isna(fc_rep):
+        fc_rep = 55.0
+    fcr = fc_max - fc_rep
+
+    def _hr(lo, hi):
+        return (int(fc_rep + fcr * lo), int(fc_rep + fcr * hi))
+
+    hr = {'Z1': _hr(.50, .60), 'Z2': _hr(.60, .70), 'Z3': _hr(.70, .80),
+          'Z4': _hr(.80, .90), 'Z5': _hr(.90, 1.0)}
+
+    v_run = p.get('pace_running_kmh', np.nan)
+    if pd.isna(v_run):
+        v_run = 9.2
+
+    # Validación del ritmo Z2 contra el historial (Karvonen inverso)
+    v_run_z2, fuente_z2 = np.nan, 'estimado (sin historial suficiente)'
+    if not acts.empty and {'sport', 'avg_hr', 'avg_speed_kmh'} <= set(acts.columns):
+        runs = acts[acts['sport'] == 'RUNNING'].dropna(subset=['avg_hr', 'avg_speed_kmh'])
+        en_z2 = runs[runs['avg_hr'].between(hr['Z2'][0], hr['Z2'][1])]
+        if len(en_z2) >= 3:
+            v_run_z2 = en_z2['avg_speed_kmh'].median()
+            fuente_z2 = f'validado con {len(en_z2)} carreras reales en Z2 de tu historial'
+        elif not runs.empty:
+            f_obs = (runs['avg_hr'].mean() - fc_rep) / fcr
+            if f_obs > 0:
+                corr = float(np.clip(0.65 / f_obs, 0.72, 1.0))
+                v_run_z2 = v_run * corr
+                fuente_z2 = (f'corregido por FC: tu historial va al {f_obs*100:.0f}% de '
+                             f'reserva cardiaca (Z3-Z4), no a ritmo de rodaje')
+    if pd.isna(v_run_z2):
+        v_run_z2 = v_run * 0.93
+    if perfil_tipo == 'nuevo':
+        v_run_z2 *= 0.95
+        fuente_z2 += ' · margen -5% por perfil nuevo'
+
+    v_bici = pred_bici if not pd.isna(pred_bici) else p.get('pace_cycling_kmh', np.nan)
+    if pd.isna(v_bici):
+        v_bici = 25.0
+    v_nat = p.get('pace_swimming_kmh', np.nan)
+    if pd.isna(v_nat):
+        v_nat = 2.6
+
+    return {'fc_max': int(fc_max), 'fc_rep': int(fc_rep), 'hr': hr,
+            'fuente_z2': fuente_z2, 'perfil': perfil_tipo,
+            'run_z2': v_run_z2, 'run_z3': v_run, 'run_z4': v_run * 1.10,
+            'run_obj': v_run, 'bici_obj': v_bici, 'nat_obj': v_nat,
+            'bici_z2': v_bici * 0.82, 'bici_z4': v_bici,
+            'nat_z2': v_nat, 'nat_z4': v_nat * 1.08}
+
+
+def calcular_fase(fecha_comp, perfil_tipo, fecha_inicio=None, semana_sim=None):
+    """Calcula fase, semana actual y semanas restantes a partir de fechas reales.
+
+    - semana_actual = semanas transcurridas desde la fecha de inicio + 1
+      (si empiezas hoy, estás en la semana 1).
+    - semanas_totales = de la fecha de inicio a la competencia.
+    - semanas_restantes = de hoy a la competencia (determina la fase).
+    - semana_sim: si se indica, FUERZA la semana actual (modo simulación/demo);
+      las semanas restantes se derivan de ella, no del calendario.
+    """
+    sem_min = SEMANAS_MINIMAS[perfil_tipo]
+    hoy = pd.Timestamp.today().normalize()
+    ini = hoy if fecha_inicio is None else pd.Timestamp(fecha_inicio).normalize()
+    if ini > hoy:
+        ini = hoy  # no permitir inicio en el futuro
+
+    if fecha_comp:
+        fc = pd.Timestamp(fecha_comp).normalize()
+        sem_rest = max(int(np.ceil((fc - hoy).days / 7)), 0)
+        sem_tot = max(int(np.ceil((fc - ini).days / 7)), 1)
+    else:
+        sem_tot = sem_min
+        sem_rest = sem_tot
+
+    if semana_sim:  # modo simulación: la semana la fija el usuario
+        sem_actual = int(min(max(semana_sim, 1), sem_tot))
+        sem_rest = max(sem_tot - sem_actual, 0)
+    else:
+        sem_actual = int((hoy - ini).days // 7) + 1
+        sem_actual = min(max(sem_actual, 1), sem_tot)
+    viable = sem_tot >= sem_min
+
+    if sem_rest <= 1:
+        fase = 'COMPETENCIA'
+    elif sem_rest <= 3:
+        fase = 'TAPERING'
+    elif sem_rest <= 6:
+        fase = 'PICO'
+    elif sem_rest <= 12:
+        fase = 'CONSTRUCCION'
+    else:
+        fase = 'BASE'
+    return {'fase': fase, 'semanas_restantes': sem_rest, 'semanas_totales': sem_tot,
+            'semana_actual': sem_actual, 'plan_viable': viable, 'semanas_minimas': sem_min}
+
+
+def analizar_objetivo(anterior, objetivo_total, sem_prep):
+    """anterior = dict con 'nat','bici','run','total' en 'h:mm'."""
+    try:
+        ant = {k: t2min(v) for k, v in anterior.items()}
+        t_obj = t2min(objetivo_total)
+    except Exception:
+        return None
+    mejora = ant['total'] - t_obj
+    if mejora <= 0:
+        return None
+    transiciones = max(ant['total'] - (ant['nat'] + ant['bici'] + ant['run']), 4)
+    reparto = {'nat': 0.15, 'bici': 0.50, 'run': 0.35}
+    splits = {k: ant[k] - mejora * w for k, w in reparto.items()}
+    mejora_pct = mejora / ant['total'] * 100
+    return {'anterior_total': min2t(ant['total']), 'objetivo_total': objetivo_total,
+            'mejora_min': round(mejora, 1), 'mejora_pct': round(mejora_pct, 1),
+            'viable': mejora_pct <= max(sem_prep, 1) * 0.5,
+            'transiciones_min': round(transiciones, 1),
+            'splits_obj': {k: min2t(v) for k, v in splits.items()},
+            'v_nat_obj': 1.9 / (splits['nat'] / 60),
+            'v_bici_obj': 90 / (splits['bici'] / 60),
+            'v_run_obj': 21.1 / (splits['run'] / 60)}
+
+
+def sleep_score_label(score):
+    """Etiqueta de calidad del sueño según el Sleep Score (estilo Garmin)."""
+    if score is None:
+        return ''
+    if score >= 90:
+        return 'Excelente'
+    if score >= 80:
+        return 'Buena'
+    if score >= 60:
+        return 'Regular'
+    return 'Mala'
+
+
+def actualizar_hoy(sesiones_hoy, z, sueno_h, body_battery, stress, enfermo,
+                   sleep_score=None):
+    graves, moderados = [], []
+    if enfermo:
+        graves.append('enfermedad o malestar')
+    if body_battery < 20:
+        graves.append(f'Body Battery muy baja ({body_battery:.0f})')
+    if sueno_h < 5:
+        graves.append(f'noche muy corta ({sueno_h:.1f} h)')
+    # Sleep Score muy bajo: aunque las horas sean correctas, el sueño no reparó
+    if sleep_score is not None and sleep_score < 40:
+        graves.append(f'calidad de sueño muy mala (score {sleep_score:.0f}/100)')
+    if not graves:
+        if body_battery < 35:
+            moderados.append(f'Body Battery baja ({body_battery:.0f})')
+        if sueno_h < 6.5:
+            moderados.append(f'sueño insuficiente ({sueno_h:.1f} h)')
+        if sleep_score is not None and sleep_score < 60:
+            moderados.append(f'calidad de sueño baja (score {sleep_score:.0f}/100, '
+                             f'«{sleep_score_label(sleep_score)}»)')
+        if stress > 70:
+            moderados.append(f'estrés alto ({stress:.0f})')
+    if graves:
+        return ('DESCANSO HOY', graves,
+                'Descanso completo: caminar suave, hidratarte y priorizar dormir. '
+                'La sesión prevista se reprograma, no se pierde.')
+    if moderados:
+        partes = [f"{s['deporte']}: versión suave de {int(s['dur_min'] * 0.6)} min, "
+                  f"todo en Z1-Z2 ({z['hr']['Z1'][0]}-{z['hr']['Z2'][1]} ppm), sin calidad."
+                  for s in sesiones_hoy if s['deporte'] not in ('Descanso', 'Movilidad')]
+        return ('SUAVIZAR HOY', moderados,
+                ' '.join(partes) or 'Hoy ya era descanso: mantenlo.')
+    return ('MANTENER', ['métricas en rango'],
+            'Tus métricas de esta mañana están en tu rango: el plan sigue tal cual.')
+
+
+def plan_competencia(z, objetivo=None):
+    hr = z['hr']
+    v_b = objetivo['v_bici_obj'] if objetivo else z['bici_obj']
+    v_r = objetivo['v_run_obj'] if objetivo else z['run_obj']
+    v_n = objetivo['v_nat_obj'] if objetivo else z['nat_obj']
+    seg = [
+        ('NATACIÓN 1,9 km', '0-300 m',
+         'Salida controlada al 90%: deja pasar al grupo rápido y busca agua libre. No dispares la FC.'),
+        ('NATACIÓN 1,9 km', '300-1.600 m',
+         f'Crucero a {pace_swim(v_n)}. Pies de alguien un punto más rápido (drafting legal: ahorra ~5%).'),
+        ('NATACIÓN 1,9 km', '1.600-1.900 m',
+         'Aumenta el pataleo: sangre a las piernas antes de ponerte de pie. Visualiza la T1.'),
+        ('T1', '—',
+         f"Saldrás con la FC en {hr['Z4'][0]}+ ppm aunque no hayas apretado (estrés, neopreno, "
+         f"horizontal→vertical). Camina rápido, no esprintes."),
+        ('BICI 90 km', 'km 0-5',
+         f"Arranque PROGRESIVO al 85% ({v_b * 0.85:.0f} km/h), 90-95 rpm. No persigas la FC: "
+         f"espera a que baje de {hr['Z3'][0]} ppm. Bebe ya."),
+        ('BICI 90 km', 'km 5-15',
+         f"Sube hacia {v_b:.0f} km/h SOLO cuando la FC se asiente en {hr['Z2'][0]}-{hr['Z3'][0]} ppm. "
+         f"Primera comida km 10-15."),
+        ('BICI 90 km', 'km 15-70',
+         f"Crucero {v_b:.0f} km/h, FC tope {hr['Z3'][1]} ppm. 60-90 g de carbohidrato/hora. "
+         f"Subidas sentado aunque te adelanten: lo devuelves corriendo."),
+        ('BICI 90 km', 'km 70-85',
+         f"El tramo del juicio: si vas bien, MANTÉN {v_b:.0f} km/h — no subas. "
+         f"Última comida sólida antes del km 80."),
+        ('BICI 90 km', 'km 85-90',
+         f"Afloja al 95% ({v_b * 0.95:.0f} km/h), cadencia 95-100 rpm: piernas sueltas para la T2."),
+        ('T2', '—',
+         'La FC sube al desmontar: normal. Cambio rápido sin pánico; gorra, dorsal y a correr.'),
+        ('CARRERA 21,1 km', 'km 0-3',
+         f"BRICK: piernas de cemento. Sal a {pace_run(v_r * 0.92)} aunque te sientas capaz de más: "
+         f"la FC debe asentarse."),
+        ('CARRERA 21,1 km', 'km 3-10',
+         f"Ritmo objetivo {pace_run(v_r)}, FC tope {hr['Z3'][1]} ppm. Gel en el km 7-8."),
+        ('CARRERA 21,1 km', 'km 10-16',
+         f"Mantén {pace_run(v_r)}. Si la FC entra en Z4 ({hr['Z4'][0]}+) sin subir el ritmo, "
+         f"afloja 10-15 s/km y reevalúa."),
+        ('CARRERA 21,1 km', 'km 16-19',
+         f"La parte dura. Permitido Z4 bajo ({hr['Z4'][0]}-{int((hr['Z4'][0] + hr['Z4'][1]) / 2)} ppm) "
+         f"si las sensaciones acompañan."),
+        ('CARRERA 21,1 km', 'km 19-21,1',
+         'Vacía el tanque: todo lo que quede. La meta de un 70.3 se recuerda toda la vida.'),
+    ]
+    t_nat = 1.9 / v_n * 60
+    t_bici = (5 / (v_b * 0.85) + 10 / (v_b * 0.95) + 70 / v_b + 5 / (v_b * 0.95)) * 60
+    t_run = (3 / (v_r * 0.92) + 18.1 / v_r) * 60
+    trans = objetivo['transiciones_min'] if objetivo else 8
+    total = t_nat + trans + t_bici + t_run
+    resumen = (f"Natación {min2t(t_nat)} + T1/T2 {min2t(trans)} + bici {min2t(t_bici)} "
+               f"+ carrera {min2t(t_run)} = **{min2t(total)}**")
+    return seg, resumen
+
+
+def frecuencia_y_disciplinas(acts):
+    """Sesiones/semana y disciplinas practicadas según el historial reciente."""
+    if acts is None or getattr(acts, 'empty', True):
+        return None, set()
+    disc = set(acts['sport'].dropna().unique()) if 'sport' in acts.columns else set()
+    if 'date' in acts.columns:
+        d = pd.to_datetime(acts['date'], utc=True, errors='coerce').dropna()
+        if len(d) > 1:
+            semanas = max((d.max() - d.min()).days / 7.0, 1.0)
+            return len(acts) / semanas, disc
+    return None, disc
+
+
+def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
+    """Plan semanal ADAPTATIVO orientado a COMPLETAR un 70.3 (1,9-90-21,1 km).
+
+    - Volúmenes reales que progresan hacia la distancia de carrera: el fondo de
+      bici crece hasta acercarse a los 90 km y la tirada larga hacia los 21 km.
+    - Incluye BRICK (bici+carrera encadenadas), la sesión clave del 70.3, en
+      Construcción y Pico.
+    - Frecuencia y carga suben de forma gradual según la semana y la fase.
+    - El sexo ajusta las velocidades objetivo (brecha de rendimiento ~7-10 %),
+      por lo que las distancias difieren ligeramente entre hombre y mujer.
+    """
+    fase = per.get('fase', 'BASE')
+    sem_tot = max(int(per.get('semanas_totales', 24)), 1)
+    sem_idx = int(per.get('semana_actual',
+                          max(sem_tot - int(per.get('semanas_restantes', 0)), 1)))
+    sem_idx = min(max(sem_idx, 1), sem_tot)
+    prog = sem_idx / sem_tot  # avance del plan, 0→1
+
+    freq_act, disciplinas = frecuencia_y_disciplinas(acts)
+    if perfil_tipo == 'nuevo':
+        f_ini = int(min(max(round(freq_act), 3), 4)) if freq_act else 3
+        f_fin = 6
+    else:
+        f_ini = int(min(max(round(freq_act), 4), 6)) if freq_act else 5
+        f_fin = 6
+    n_ses = int(round(f_ini + (f_fin - f_ini) * min(prog * 1.3, 1.0)))
+    if fase == 'TAPERING':
+        n_ses -= 1
+    if fase == 'COMPETENCIA':
+        n_ses = 3
+    n_ses = int(min(max(n_ses, 3), 6))
+
+    # --- Volumen: rampa hacia el pico × fase × nivel del atleta ---
+    ramp = 0.45 + 0.55 * min(prog / 0.85, 1.0)        # 0.45 (inicio) → 1.0 (~85 % del plan)
+    fase_mult = {'BASE': 0.80, 'CONSTRUCCION': 1.0, 'PICO': 1.0,
+                 'TAPERING': 0.55, 'COMPETENCIA': 0.35}.get(fase, 1.0)
+    nivel = 0.80 if perfil_tipo == 'nuevo' else 1.0
+    vol = ramp * fase_mult * nivel
+    intens = fase in ('CONSTRUCCION', 'PICO')
+
+    # Semana de DESCARGA (recuperación) cada 4ª semana — patrón clásico 3:1.
+    # Se reduce el volumen ~40 % y se baja la intensidad para asimilar la carga
+    # acumulada (supercompensación) y prevenir el sobreentrenamiento.
+    es_descarga = (sem_idx % 4 == 0) and fase in ('BASE', 'CONSTRUCCION', 'PICO') \
+        and sem_idx < sem_tot - 2
+    if es_descarga:
+        vol *= 0.6
+        intens = False
+
+    # Velocidades objetivo, ajustadas por sexo (brecha de rendimiento documentada)
+    sx = 1.0 if sexo == 'M' else 0.93
+    v_b2, v_b4 = zonas['bici_z2'] * sx, zonas['bici_z4'] * sx
+    v_run, v_run4 = zonas['run_z2'] * sx, zonas['run_z4'] * sx
+    v_nat = zonas['nat_z2'] * sx
+    hrz2 = f"{zonas['hr']['Z2'][0]}-{zonas['hr']['Z2'][1]} ppm"
+    rz2 = pace_run(v_run)
+    nz2 = pace_swim(v_nat)
+
+    def dur(peak):
+        return max(int(round(peak * vol / 5.0) * 5), 20)   # min, múltiplos de 5
+    def kb(m, v):
+        return round(m / 60 * v, 1)
+    def kr(m):
+        return round(m / 60 * v_run, 1)
+    def ks(m):
+        return round(m / 60 * v_nat, 2)
+
+    nat_intro = bool(disciplinas) and 'SWIMMING' not in disciplinas
+
+    # --- Sábado: FONDO de bici (+ BRICK de carrera en construcción/pico) ---
+    bike_long = dur(220)                       # pico ≈ 3,5 h → cerca de los 90 km
+    brick_run = dur(25) if intens else 0
+    if intens and brick_run:
+        sab = {'dia': 'Sábado', 'deporte': 'Ciclismo', 'tipo': 'fondo + BRICK',
+               'dur_min': bike_long + brick_run, 'km': kb(bike_long, v_b2),
+               'detalle': (f'🔑 BRICK (sesión clave del 70.3): fondo de '
+                           f'{kb(bike_long, v_b2):.0f} km de bici a {v_b2:.0f} km/h en Z2 '
+                           f'({hrz2}) y, SIN parar, {brick_run} min de carrera a {rz2} con '
+                           f'"piernas de cemento". Entrena la transición T2 y la resistencia '
+                           f'específica. Come e hidrátate como en carrera.')}
+    else:
+        sab = {'dia': 'Sábado', 'deporte': 'Ciclismo', 'tipo': 'fondo Z2',
+               'dur_min': bike_long, 'km': kb(bike_long, v_b2),
+               'detalle': (f'Fondo de {kb(bike_long, v_b2):.0f} km a {v_b2:.0f} km/h en Z2 '
+                           f'({hrz2}). Construye la resistencia aeróbica de base hacia los 90 km; '
+                           f'practica comida e hidratación de carrera.')}
+
+    catalogo = [
+        ('Sábado', sab),
+        ('Jueves', {'dia': 'Jueves', 'deporte': 'Natación', 'tipo': 'resistencia',
+                    'dur_min': dur(55), 'km': ks(dur(55)),
+                    'detalle': f'Series de resistencia a {nz2} (técnica y respiración bilateral). '
+                               f'Construye los 1,9 km de la carrera.'
+                               + (' Empieza por aquí: aún no registras natación.' if nat_intro else '')}),
+        ('Domingo', {'dia': 'Domingo', 'deporte': 'Carrera', 'tipo': 'tirada larga Z2',
+                     'dur_min': dur(110), 'km': kr(dur(110)),
+                     'detalle': f'Tirada larga progresiva de {kr(dur(110)):.1f} km a {rz2}, '
+                                f'terminando en Z2 alto. Resistencia para los 21,1 km.'}),
+        ('Martes', {'dia': 'Martes', 'deporte': 'Carrera',
+                    'tipo': 'series Z4' if intens else 'rodaje Z2',
+                    'dur_min': dur(55), 'km': kr(dur(55)),
+                    'detalle': (f'Calienta y haz 5x4 min en Z4 a {pace_run(v_run4)} con 2 min suaves.'
+                                if intens else f'Rodaje cómodo a {rz2} en Z2 ({hrz2}).')}),
+        ('Miércoles', {'dia': 'Miércoles', 'deporte': 'Ciclismo',
+                       'tipo': 'series Z4' if intens else 'rodaje Z2',
+                       'dur_min': dur(85), 'km': kb(dur(85), v_b4 if intens else v_b2),
+                       'detalle': (f'4x8 min en Z4 a ~{v_b4:.0f} km/h, 4 min suaves entre series.'
+                                   if intens else f'Rodaje a {v_b2:.0f} km/h en Z2, cadencia 85-95 rpm.')}),
+        ('Viernes', {'dia': 'Viernes', 'deporte': 'Natación', 'tipo': 'técnica',
+                     'dur_min': dur(45), 'km': ks(dur(45)),
+                     'detalle': f'Técnica de brazada y pies; series cortas a {nz2}.'}),
+    ]
+    por_dia = {dia: s for dia, s in catalogo[:n_ses]}
+
+    if fase == 'COMPETENCIA':
+        por_dia['Domingo'] = {'dia': 'Domingo', 'deporte': 'Competencia', 'tipo': '70.3',
+                              'km': 0, 'dur_min': 0,
+                              'detalle': '¡Día de carrera! Aplica el plan km a km de más abajo.'}
+
+    orden = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+    plan = []
+    for dia in orden:
+        if dia in por_dia:
+            plan.append(por_dia[dia])
+        else:
+            plan.append({'dia': dia, 'deporte': 'Descanso', 'tipo': 'recuperación',
+                         'km': 0, 'dur_min': 0,
+                         'detalle': 'Descanso o 15 min de movilidad. La adaptación ocurre hoy.'})
+    meta = {'n_ses': n_ses, 'sem_idx': sem_idx, 'sem_tot': sem_tot,
+            'freq_act': freq_act, 'disciplinas': disciplinas, 'nat_intro': nat_intro,
+            'tiene_brick': bool(intens and brick_run), 'descarga': es_descarga}
+    return plan, meta
+
+
+# ----------------------------------------------------------------------------
+# Gráficos
+# ----------------------------------------------------------------------------
+def grafico_forma(fd):
+    fig, ax = plt.subplots(figsize=(10, 3))
+    fd = fd.tail(365)
+    ax.plot(fd['date'], fd['CTL'], color='#21a366', lw=2, label='Fitness (CTL)')
+    ax.plot(fd['date'], fd['ATL'], color='#f97316', lw=2, label='Fatiga (ATL)')
+    ax.plot(fd['date'], fd['TSB'], color='#3b82f6', lw=1.6, ls='--', label='Frescura (TSB)')
+    ax.axhline(0, color='#d8d5cd', lw=1)
+    ax.legend(loc='upper left', frameon=False, fontsize=9, ncol=3)
+    for s in ('top', 'right'):
+        ax.spines[s].set_visible(False)
+    ax.tick_params(labelsize=8, colors='#8a877f')
+    fig.tight_layout()
+    return fig
+
+
+def grafico_progreso(acts):
+    """Evolución del ritmo medio por disciplina a lo largo del tiempo, con su
+    tendencia. Muestra el progreso del atleta y devuelve (fig, % mejora por disciplina)."""
+    deps = [('RUNNING', 'Carrera', '#f59e0b'), ('CYCLING', 'Ciclismo', '#22a06b'),
+            ('SWIMMING', 'Natación', '#3b82f6')]
+    if acts is None or 'sport' not in acts.columns or 'date' not in acts.columns:
+        return None, {}
+    pres = [(s, n, c) for s, n, c in deps
+            if not acts[acts['sport'] == s].dropna(subset=['avg_speed_kmh']).empty]
+    if not pres:
+        return None, {}
+    fig, axes = plt.subplots(1, len(pres), figsize=(10, 2.7))
+    if len(pres) == 1:
+        axes = [axes]
+    mejoras = {}
+    for ax, (s, n, c) in zip(axes, pres):
+        df = acts[acts['sport'] == s].dropna(subset=['avg_speed_kmh', 'date']).copy()
+        df['date'] = pd.to_datetime(df['date'], utc=True, errors='coerce').dt.tz_localize(None)
+        df = df.dropna(subset=['date']).sort_values('date')
+        if len(df) < 2:
+            ax.axis('off'); continue
+        x, y = df['date'], df['avg_speed_kmh'].values
+        ax.scatter(x, y, s=14, color=c, alpha=0.45)
+        xi = (df['date'] - df['date'].min()).dt.days.values.astype(float)
+        if xi.max() > 0:
+            m, b = np.polyfit(xi, y, 1)
+            ax.plot(x, m * xi + b, color=c, lw=2.2)
+            y0, y1 = b, m * xi[-1] + b
+            mejoras[n] = (y1 - y0) / y0 * 100 if y0 > 0 else 0.0
+        ax.set_title(n, fontsize=10, color=c, fontweight='bold')
+        ax.set_ylabel('km/h', fontsize=8)
+        ax.tick_params(labelsize=7, colors='#8a877f')
+        for sp in ('top', 'right'):
+            ax.spines[sp].set_visible(False)
+        for lbl in ax.get_xticklabels():
+            lbl.set_rotation(30); lbl.set_ha('right')
+    fig.tight_layout()
+    return fig, mejoras
+
+
+def progreso_semanal(acts, desde=None):
+    """Media SEMANAL del ritmo por disciplina + KPIs (ritmo actual y % de mejora).
+
+    Solo considera actividades a partir de `desde` (fecha de inicio del plan), porque
+    el gráfico refleja la evolución DESDE QUE EMPEZASTE el plan. Devuelve
+    (df_indice, kpis): índice de progreso (primera semana = 100) por disciplina.
+    """
+    deps = [('RUNNING', 'Carrera'), ('CYCLING', 'Ciclismo'), ('SWIMMING', 'Natación')]
+    if acts is None or 'sport' not in acts.columns or 'date' not in acts.columns:
+        return None, {}
+    a = acts.dropna(subset=['avg_speed_kmh']).copy()
+    a['date'] = pd.to_datetime(a['date'], utc=True, errors='coerce').dt.tz_localize(None)
+    a = a.dropna(subset=['date'])
+    if desde is not None:
+        a = a[a['date'] >= pd.Timestamp(desde).normalize()]   # solo desde el inicio del plan
+    if a.empty:
+        return None, {}
+    # Semana DESDE EL INICIO (1, 2, 3…), no por calendario: así la semana 1 es
+    # un único punto y el gráfico solo aparece con ≥2 semanas de actividad.
+    inicio = a['date'].min()
+    a['semana'] = ((a['date'] - inicio).dt.days // 7) + 1
+    series, kpis = {}, {}
+    for s, n in deps:
+        d = a[a['sport'] == s]
+        if d.empty:
+            continue
+        wk = d.groupby('semana')['avg_speed_kmh'].mean().sort_index()
+        if len(wk) < 2:
+            continue
+        series[n] = wk
+        v0, v1 = float(wk.iloc[0]), float(wk.iloc[-1])
+        kpis[n] = (v1, (v1 - v0) / v0 * 100 if v0 > 0 else 0.0)
+    if not series:
+        return None, {}
+    idx = pd.DataFrame({n: s / s.iloc[0] * 100 for n, s in series.items()})
+    idx.index.name = 'Semana'
+    return idx, kpis
+
+
+def grafico_zonas(z):
+    fig, ax = plt.subplots(figsize=(10, 1.9))
+    for zona, (lo, hi) in z['hr'].items():
+        ax.barh(0, hi - lo, left=lo, height=0.62, color=GARMIN_COLORS[zona])
+        ax.text((lo + hi) / 2, 0, f"{zona}\n{lo}-{hi}", ha='center', va='center',
+                color='white', fontsize=9, fontweight='bold')
+    ax.set_xlim(z['hr']['Z1'][0] - 8, z['hr']['Z5'][1] + 8)
+    ax.set_yticks([])
+    ax.set_xlabel('pulsaciones por minuto (ppm)', fontsize=9)
+    for s in ('top', 'right', 'left'):
+        ax.spines[s].set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
+# Macrociclo: color y carga relativa (0-1) de cada fase, con fines pedagógicos
+FASES_INFO = [
+    ('Base',         '#3b82f6', 0.55, 'volumen alto · intensidad baja'),
+    ('Construcción', '#22a06b', 0.80, 'volumen alto · intensidad media (sube la carga)'),
+    ('Pico',         '#ef4444', 1.00, 'intensidad máxima · volumen medio'),
+    ('Taper',        '#f59e0b', 0.35, 'descarga: baja el volumen, llega la frescura'),
+    ('70.3',         '#7c3aed', 0.25, 'día de carrera'),
+]
+NOMBRE_FASE = {'BASE': 'Base', 'CONSTRUCCION': 'Construcción', 'PICO': 'Pico',
+               'TAPERING': 'Taper', 'COMPETENCIA': '70.3'}
+
+
+def grafico_fases(fase_actual, sem_actual, sem_tot):
+    """Barra de macrociclo cuyos tramos respetan los MISMOS umbrales por semanas
+    que definen la fase (base >12 sem, construcción 7-12, pico 4-6, taper 2-3,
+    70.3 ≤1), de modo que el marcador SIEMPRE cae sobre la fase activa.
+    El color y la altura de cada tramo representan la carga relativa de la fase.
+    """
+    sem_tot = max(int(sem_tot), 1)
+
+    def frac(semanas_desde_inicio):
+        return min(max(semanas_desde_inicio / sem_tot, 0.0), 1.0)
+
+    # Fin de cada fase como fracción del plan (derivado de las semanas restantes)
+    fin = {
+        'Base': frac(sem_tot - 12),
+        'Construcción': frac(sem_tot - 6),
+        'Pico': frac(sem_tot - 3),
+        'Taper': frac(sem_tot - 1),
+        '70.3': 1.0,
+    }
+    ini = 0.0
+    activa = NOMBRE_FASE.get(fase_actual, '')
+    fig, ax = plt.subplots(figsize=(10, 1.5))
+    for nom, color, carga, _desc in FASES_INFO:
+        x1 = fin[nom]
+        w = x1 - ini
+        if w > 0.001:
+            es_act = (nom == activa)
+            # la altura de la barra refleja la carga relativa de la fase
+            h = 0.25 + 0.55 * carga
+            ax.barh(0, w, left=ini, height=h, color=color,
+                    alpha=1.0 if es_act else 0.40,
+                    edgecolor='#111111' if es_act else 'none',
+                    linewidth=2.2 if es_act else 0)
+            ax.text(ini + w / 2, 0, nom, ha='center', va='center', color='white',
+                    fontsize=8.5, fontweight='bold')
+        ini = x1
+    pos = min(max(sem_actual / sem_tot, 0.0), 1.0)
+    ax.plot([pos], [0.62], marker='v', color='#111111', markersize=12)
+    ax.text(pos, 0.80, f'semana {sem_actual}', ha='center', fontsize=8.5, fontweight='bold')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.7, 1.05)
+    ax.axis('off')
+    fig.tight_layout()
+    return fig
+
+
+# ----------------------------------------------------------------------------
+# Interfaz
+# ----------------------------------------------------------------------------
+datos = cargar_datos()
+hay_datos = not datos['perfiles'].empty
+
+# Procesa el retorno de Strava (?code=...) ANTES de pintar la interfaz
+handle_strava_callback()
+
+# ---------------- Sidebar ----------------
+with st.sidebar:
+    st.markdown('### 🔴 Mi plan 70.3')
+
+    # --- Selector de idioma (interfaz) ---
+    idioma = IDIOMAS[st.radio('🌐 Idioma / Language', list(IDIOMAS.keys()),
+                              horizontal=True, key='idioma_sel')]
+
+    # --- Fuente de datos: Strava / Garmin ---
+    st.divider()
+    st.markdown(f'**{t("sync_datos")}**')
+    _FUENTES = ['strava', 'garmin']
+    if st.session_state.get('fuente_sel') not in _FUENTES:
+        st.session_state.pop('fuente_sel', None)   # limpia valores antiguos (p. ej. Local)
+    fuente = st.radio(
+        t('de_donde'), _FUENTES,
+        format_func=lambda v: {'strava': t('opt_strava'), 'garmin': t('opt_garmin')}[v],
+        key='fuente_sel')
+
+    if fuente == 'strava':
+        if not STRAVA_AVAILABLE:
+            st.caption('Instala `stravalib` para sincronizar con Strava.')
+        elif not (STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET):
+            st.caption('Configura `strava_client_id` y `strava_client_secret` en secrets.toml.')
+        else:
+            if 'strava_token' not in st.session_state:
+                auth_url = get_strava_auth_url()
+                if auth_url:
+                    st.link_button('🔗 Conectar con Strava', auth_url,
+                                   use_container_width=True)
+                    st.caption('Tras autorizar, tus zonas y ritmos se calcularán '
+                               'con tus actividades reales de Strava.')
+                    st.caption('¿Conectar con OTRA cuenta? Strava recuerda tu sesión del '
+                               'navegador y reusa esa cuenta. Cierra sesión en Strava (o '
+                               'revoca el acceso) y luego pulsa Conectar:')
+                    cc1, cc2 = st.columns(2)
+                    cc1.link_button('Cerrar sesión en Strava',
+                                    'https://www.strava.com/logout', use_container_width=True)
+                    cc2.link_button('Revocar acceso (apps)',
+                                    'https://www.strava.com/settings/apps', use_container_width=True)
+                    st.caption('Alternativa más rápida: abre la app en una ventana de incógnito.')
+            else:
+                _nom = fetch_strava_athlete_name(st.session_state['strava_token'])
+                st.success(f'✅ Strava conectado{f" · {_nom}" if _nom else ""}')
+                dias_sync = st.slider('Días a sincronizar', 30, 365, 90, 30)
+                if st.button('🔄 Sincronizar actividades', use_container_width=True):
+                    a = fetch_strava_activities(st.session_state['strava_token'], days=dias_sync)
+                    st.session_state['actividades_strava'] = a
+                    if a is not None and not a.empty:
+                        st.toast(f'✅ {len(a)} actividades sincronizadas')
+                    else:
+                        st.warning('Strava no devolvió actividades en ese rango. '
+                                   'Prueba a ampliar los días o revisa que tu cuenta '
+                                   'tenga entrenamientos con pulsómetro.')
+                _sa = st.session_state.get('actividades_strava')
+                if _sa is not None and not _sa.empty:
+                    st.caption(f'Usando {len(_sa)} actividades reales de Strava.')
+                if st.button('🔓 Desconectar / cambiar de cuenta', use_container_width=True):
+                    desconectar_strava()
+                    st.rerun()
+                st.caption('Para cambiar de atleta: desconecta aquí y, si Strava te '
+                           'reconecta solo, revoca el acceso en strava.com → Ajustes → '
+                           'Mis aplicaciones, o inicia sesión con la otra cuenta.')
+
+    elif fuente == 'garmin':
+        st.info('🔭 **Próximo paso del proyecto.** La sincronización directa con '
+                'Garmin Connect daría acceso a Body Battery, HRV y sueño — métricas '
+                'que hoy se cargan desde los .fit locales.')
+        with st.expander('Vista previa de la conexión Garmin'):
+            st.text_input('Email Garmin', key='garmin_email_demo',
+                          placeholder='tucorreo@ejemplo.com')
+            st.text_input('Contraseña', type='password', key='garmin_pass_demo')
+            st.button('🔐 Conectar con Garmin', disabled=True,
+                      use_container_width=True,
+                      help='Deshabilitado en la demo: la API de Garmin requiere '
+                           'aprobación oficial (Garmin Developer Program).')
+            estado = ('`garminconnect` instalado ✅' if GARMIN_AVAILABLE
+                      else '`garminconnect` no instalado')
+            st.caption(f'Roadmap técnico: vía OAuth oficial o `garminconnect`. '
+                       f'Estado actual: {estado}.')
+
+    st.divider()
+
+    # Sin selector de atleta ni carga local: la app trabaja con TUS datos (Strava)
+    # o en modo demo. El perfil base es de demostración; Strava aporta el historial.
+    perfil_df, fitness, acts = datos_demo()
+    perfil_row = perfil_df.set_index('athlete').loc['Demo']
+    pred_bici = 26.5
+    atleta = 'Demo'
+
+    perfil_tipo = st.radio(t('tu_perfil'), ['nuevo', 'experimentado'],
+                           format_func=lambda v: t('nuevo') if v == 'nuevo' else t('experto'),
+                           key='perfil_tipo_sel', help=GLOSARIO['Zonas Z1-Z5'])
+    st.caption(f"Plan mínimo: {SEMANAS_MINIMAS[perfil_tipo]} semanas "
+               f"({'6 meses' if perfil_tipo == 'nuevo' else '3 meses'})")
+    sexo = st.radio(t('sexo'), ['M', 'F'], horizontal=True, key='sexo_sel',
+                    format_func=lambda v: t('hombre') if v == 'M' else t('mujer'))
+
+    st.divider()
+    st.markdown(f'**{t("tu_objetivo")}**')
+
+    # Fecha de inicio PERSISTENTE: se fija al iniciar el plan y no cambia sola al
+    # pasar los días. Solo se mueve con «Reiniciar plan» (o editándola a mano).
+    if 'fecha_inicio_plan' not in st.session_state:
+        st.session_state['fecha_inicio_plan'] = leer_inicio_plan() or date.today()
+        guardar_inicio_plan(st.session_state['fecha_inicio_plan'])
+    cI, cR = st.columns([2, 1])
+    fecha_inicio = cI.date_input(
+        t('fecha_inicio'), key='fecha_inicio_plan',
+        help='Se fija al iniciar el plan; NO cambia sola al pasar los días, para que '
+             'la semana progrese de verdad. Usa «Reiniciar» para empezar hoy de cero.')
+    if cR.button(t('reiniciar'), help='Empezar el plan hoy (semana 1)'):
+        st.session_state['fecha_inicio_plan'] = date.today()
+        guardar_inicio_plan(date.today())
+        st.rerun()
+    guardar_inicio_plan(fecha_inicio)
+
+    usa_fecha = st.toggle(t('tengo_fecha'), value=True)
+    if usa_fecha:
+        fecha_comp = st.date_input(t('cuando_703'),
+                                   value=fecha_inicio + timedelta(weeks=SEMANAS_MINIMAS[perfil_tipo]))
+    else:
+        meses = st.slider('Meses de plan', 3, 12,
+                          6 if perfil_tipo == 'nuevo' else 3)
+        fecha_comp = fecha_inicio + timedelta(weeks=meses * 4)
+
+    # Total de semanas reales del plan (límite del slider de simulación)
+    sem_tot_plan = max(int(np.ceil((pd.Timestamp(fecha_comp) -
+                                    pd.Timestamp(fecha_inicio)).days / 7)), 1)
+    sim_on = st.toggle('🎛️ Simular semana (demo)', value=False,
+                       help='Para la presentación: fuerza en qué semana del plan estás, '
+                            'sin depender de la fecha real. Recalcula fase, carga y plan.')
+    semana_sim = (st.slider('Semana actual (simulada)', 1, sem_tot_plan,
+                            min(6, sem_tot_plan)) if sim_on else None)
+
+    objetivo = None
+    if perfil_tipo == 'experimentado':
+        st.divider()
+        st.markdown('**Tu último 70.3** (orientado a marca)')
+        c1, c2 = st.columns(2)
+        t_nat = c1.text_input('Natación', '0:42')
+        t_bici = c2.text_input('Bici', '2:52')
+        t_run = c1.text_input('Carrera', '2:01')
+        t_tot = c2.text_input('Total', '5:45')
+        t_objetivo = st.text_input('Tiempo objetivo', '5:30')
+
+# ---------------- Cabecera + Actualizar hoy ----------------
+st.title('Mi plan 70.3')
+
+# --- Bienvenida personalizada + frase del día ---
+nombre = None
+if 'strava_token' in st.session_state:
+    nombre = fetch_strava_athlete_name(st.session_state['strava_token'])
+if not nombre:
+    nombre = (str(atleta).split()[0].capitalize()
+              if atleta and str(atleta).lower() != 'demo' else 'triatleta')
+FRASES_DIA = [
+    "el plan no es el que más duele, sino el que sí cumples.",
+    "la constancia de hoy es la marca de tu próximo 70.3.",
+    "entrena por pulso, no por ego: la FC manda sobre el ritmo.",
+    "cada Z2 bien hecha es un ladrillo de tu base aeróbica.",
+    "descansar también es entrenar: la adaptación ocurre durmiendo.",
+    "la transición se entrena; el día de la carrera no se improvisa.",
+    "nada lento para correr rápido: la paciencia es velocidad diferida.",
+    "el 70.3 se gana en la bici y se sufre corriendo: dosifica.",
+    "mejor una semana sostenible que tres heroicas y una lesión.",
+    "tu mejor sesión es la que te deja con ganas de la siguiente.",
+]
+frase_base = FRASES_DIA[date.today().timetuple().tm_yday % len(FRASES_DIA)]
+st.markdown(f"#### {t('hola', n=nombre)}")
+
+# Si se eligió Strava y hay actividades sincronizadas, reemplazan al historial
+# local (el motor calcula FC máx, zonas y valida ritmos con datos reales)
+usando_strava = False
+if fuente == 'strava':
+    _sa = st.session_state.get('actividades_strava')
+    if _sa is not None and not _sa.empty:
+        acts = _sa
+        usando_strava = True
+        st.success(f'📱 Datos en vivo: {len(_sa)} actividades de Strava. '
+                   'Zonas y ritmos calculados con tu entrenamiento real.')
+
+per = calcular_fase(fecha_comp, perfil_tipo, fecha_inicio, semana_sim)
+
+# --- Frase del día (banner destacado, generada por Gemini si está disponible) ---
+_frase = generar_frase_dia(nombre, per['fase'], date.today().toordinal(), frase_base)
+st.markdown(
+    '<div style="background:linear-gradient(100deg,#0B2A4A 0%,#13456F 55%,#1d6fa5 100%);'
+    'border-radius:16px;padding:18px 22px;margin:2px 0 16px;'
+    'box-shadow:0 2px 12px rgba(11,42,74,.25);">'
+    '<div style="color:#8fd0ff;font-size:.72rem;font-weight:700;letter-spacing:2px;">'
+    'FRASE DEL DÍA</div>'
+    f'<div style="color:#fff;font-size:1.35rem;font-weight:800;line-height:1.3;margin-top:4px;">'
+    f'&ldquo;{_frase}&rdquo;</div>'
+    f'<div style="color:#FF8A5B;font-size:.85rem;font-weight:700;margin-top:8px;">— {nombre} 💪</div>'
+    '</div>', unsafe_allow_html=True)
+
+# En demo, las actividades reflejan las semanas ya transcurridas del plan
+if not usando_strava:
+    acts = acts_demo_progresivo(per, sexo, fecha_inicio)
+zonas = calcular_zonas(perfil_row, acts, perfil_tipo, pred_bici)
+
+# Con Strava, la curva de forma (CTL/ATL/TSB) también se calcula en vivo
+if usando_strava:
+    _fit_str = fitness_desde_actividades(acts, zonas['fc_rep'], zonas['fc_max'], sexo)
+    if not _fit_str.empty:
+        fitness = _fit_str
+
+# Inferencia con los modelos entrenados (si están disponibles en salidas/modelos/)
+modelos = cargar_modelos()
+infer = {}
+if modelos:
+    infer = inferir_con_modelos(modelos, features_atleta(acts, zonas, fitness, perfil_row, sexo))
+    # El modelo alimenta SOLO los objetivos de carrera (90 km / 21,1 km);
+    # las zonas de entrenamiento semanal salen del historial/FC (Karvonen),
+    # iguales para ambas disciplinas. Así el sexo influye de forma coherente
+    # en los objetivos de carrera y la carga, no en las zonas de entreno.
+    vb = infer.get('bici_pred_kmh')
+    if vb and 10 < vb < 45:
+        zonas['bici_obj'] = vb
+    vr = infer.get('run_pred_kmh')
+    if vr and 6 < vr < 20:
+        zonas['run_obj'] = vr
+if perfil_tipo == 'experimentado':
+    objetivo = analizar_objetivo({'nat': t_nat, 'bici': t_bici, 'run': t_run,
+                                  'total': t_tot}, t_objetivo,
+                                 per['semanas_restantes'])
+    if objetivo:
+        zonas['run_obj'] = objetivo['v_run_obj']
+        zonas['bici_obj'] = objetivo['v_bici_obj']
+        zonas['nat_obj'] = objetivo['v_nat_obj']
+
+# --- Panel de estado: de dónde salen los datos y si los modelos predicen ---
+if usando_strava:
+    fuente_ico, fuente_txt = '📱', t('opt_strava').replace('📱 ', '')
+elif fuente == 'garmin':
+    fuente_ico, fuente_txt = '⌚', 'Garmin (roadmap)'
+else:
+    fuente_ico, fuente_txt = '🧪', 'Demo'
+_em_estado, _em_msg = estado_modelos()
+_mod_val = {'activo': 'Activos ✅', 'sin_archivos': 'No encontrados ⚠️',
+            'sin_librerias': 'Sin librerías ⛔'}[_em_estado]
+_s1, _s2, _s3 = st.columns(3)
+_s1.metric(t('m_fuente'), f'{fuente_ico} {fuente_txt}')
+_n_act = len(acts) if (acts is not None and not getattr(acts, 'empty', True)) else 0
+_s2.metric(t('m_acts'), f'{_n_act}' if _n_act else '—',
+           help='Tus actividades determinan: FC máxima y zonas, validación de ritmos, '
+                'la curva CTL/ATL/TSB, la frecuencia base del plan (sesiones/semana) y '
+                'las predicciones de los modelos. Más historial = plan más afinado.')
+_s3.metric(t('m_modelos'), _mod_val, help=_em_msg)
+if _em_estado == 'activo' and infer.get('perfil_nombre'):
+    st.caption(f"🧠 Inferencia activa — perfil **{infer['perfil_nombre']}** · "
+               f"bici estimada por XGBoost **{zonas['bici_obj']:.1f} km/h**.")
+elif _em_estado == 'sin_librerias':
+    st.caption(f"⛔ Modelos inactivos: {_em_msg}. (Las zonas/ritmos siguen siendo reales.)")
+elif _em_estado == 'sin_archivos':
+    st.caption(f"⚠️ Modelos inactivos: {_em_msg}. Coloca la carpeta `salidas/` "
+               "(con `modelos/`) junto a `app.py`.")
+_gem_ok = inicializar_gemini() is not None
+st.caption('🤖 Explicaciones IA (Gemini): **configurado** — el «¿Por qué este plan?» y el '
+           'ajuste del día se redactan en vivo.' if _gem_ok else
+           '🤖 Explicaciones IA (Gemini): inactivo — se usan plantillas (revisa `gemini_api_key`).')
+_sx = 'Mujer' if sexo == 'F' else 'Hombre'
+_sx_efecto = ('y las predicciones de ritmo (modelo XGBoost)' if (_em_estado == 'activo' and infer)
+              else '(sus predicciones se verán al activar los modelos)')
+st.caption(f'🚻 Sexo: **{_sx}** — ajusta la carga de entrenamiento (TRIMP de Banister) '
+           f'{_sx_efecto}. La estructura del plan y las zonas no cambian por sexo '
+           '(la FC máxima es independiente del sexo, Tanaka 2001).')
+
+if not per['plan_viable']:
+    st.warning(f"⚠ Para un atleta {perfil_tipo} se recomiendan al menos "
+               f"{per['semanas_minimas']} semanas de preparación y este plan tiene "
+               f"{per['semanas_totales']}. Considera una carrera más lejana o ajusta "
+               f"el objetivo (terminar bien, no competir).")
+if objetivo:
+    if objetivo['viable']:
+        st.success(f"✓ Objetivo viable: {objetivo['anterior_total']} → "
+                   f"{objetivo['objetivo_total']} (-{objetivo['mejora_min']:.0f} min). "
+                   f"Splits objetivo — natación {objetivo['splits_obj']['nat']} · "
+                   f"bici {objetivo['splits_obj']['bici']} · carrera {objetivo['splits_obj']['run']}.")
+    else:
+        st.warning(f"⚠ Objetivo ambicioso ({objetivo['mejora_pct']}%): el plan lo "
+                   f"apunta, pero la estimación realista queda por encima. "
+                   f"La mejora se concentra en la bici.")
+
+# ---------------- Cómo estás hoy ----------------
+recalc_hoy = None  # se rellena si el atleta recalcula su día
+st.subheader(t('h_hoy'))
+
+# métricas (reflejan los valores recalculados o los de referencia)
+bb_hoy = float(st.session_state.get('bb', 78))
+sueno_hoy = float(st.session_state.get('sueno', 7.6))
+stress_hoy = float(st.session_state.get('stress', 28))
+sleep_hoy = float(st.session_state.get('sleep_score', 75))
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric('Body Battery', f'{bb_hoy:.0f}',
+          'bien cargado' if bb_hoy >= 60 else ('baja' if bb_hoy < 35 else 'media'),
+          help=GLOSARIO['Body Battery'])
+m2.metric('Estrés', f'{stress_hoy:.0f}',
+          'bajo' if stress_hoy < 40 else ('alto' if stress_hoy > 70 else 'medio'),
+          delta_color='inverse', help=GLOSARIO['Estrés'])
+m3.metric('HRV', '62 ms', 'estable', help=GLOSARIO['HRV'])
+m4.metric('Sueño (horas)', f"{int(sueno_hoy)}h {int((sueno_hoy % 1) * 60):02d}",
+          'suficiente' if sueno_hoy >= 7 else ('corto' if sueno_hoy < 6 else 'justo'),
+          help=GLOSARIO['Sueño'])
+m5.metric('Sleep Score', f'{sleep_hoy:.0f}',
+          sleep_score_label(sleep_hoy), delta_color='off',
+          help=GLOSARIO['Sleep Score'])
+
+# Formulario persistente: queda visible y recuerda lo último introducido
+with st.expander('⟳ Actualizar mi día — ¿cómo amaneciste hoy?',
+                 expanded=st.session_state.get('recalc_done', False)):
+    with st.form('hoy'):
+        st.caption('Introduce tus métricas de esta mañana y pulsa «Recalcular mi día».')
+        c1, c2, c3, c4 = st.columns(4)
+        sueno_in = c1.number_input('Horas de sueño', 0.0, 12.0, sueno_hoy, 0.1)
+        bb_in = c2.number_input('Body Battery', 0, 100, int(bb_hoy))
+        stress_in = c3.number_input('Estrés', 0, 100, int(stress_hoy))
+        enfermo_in = c4.checkbox('Me siento enfermo',
+                                 value=bool(st.session_state.get('enfermo', False)))
+        score_in = st.slider('Sleep Score / calidad del sueño (0-100)', 0, 100,
+                             int(sleep_hoy),
+                             help='El número de tu reloj (Garmin Sleep Score): mide la '
+                                  'CALIDAD del sueño, no las horas. Mala < 60.')
+        st.caption(f'Calidad estimada: **{sleep_score_label(score_in)}**')
+        if st.form_submit_button('Recalcular mi día', type='primary'):
+            st.session_state.update(sueno=sueno_in, bb=bb_in, stress=stress_in,
+                                    enfermo=enfermo_in, sleep_score=score_in,
+                                    recalc_done=True)
+            st.rerun()
+
+if st.session_state.get('recalc_done'):
+    dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+    ses_df = datos['sesiones_plan']
+    ses_hoy = (ses_df[(ses_df['athlete'] == atleta) &
+                      (ses_df['dia'].str.startswith(dia_hoy))].to_dict('records')
+               if hay_datos and not ses_df.empty else [])
+
+    # Descripción de la sesión planificada de hoy (real o generada) para Gemini
+    sesion_hoy_txt = ''
+    if ses_hoy:
+        r = ses_hoy[0]
+        sesion_hoy_txt = f"{r.get('deporte', '')} · {r.get('tipo', '')}" + \
+                         (f" · {r.get('dur_min')} min" if r.get('dur_min') else '')
+    else:
+        _plan_hoy, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo)
+        for s in _plan_hoy:
+            if s['dia'] == dia_hoy:
+                sesion_hoy_txt = f"{s['deporte']} · {s['tipo']}" + \
+                                 (f" · {s['dur_min']} min" if s['dur_min'] else '')
+                break
+
+    decision, motivos, detalle = actualizar_hoy(
+        ses_hoy, zonas, st.session_state['sueno'], st.session_state['bb'],
+        st.session_state['stress'], st.session_state.get('enfermo', False),
+        st.session_state.get('sleep_score'))
+
+    # Explicación en vivo con Gemini, basada en la sesión planificada de hoy
+    explicacion_gemini = generar_explicacion_dia(
+        atleta, dia_hoy, decision, motivos, zonas, per['fase'], sesion_hoy_txt)
+    if explicacion_gemini:
+        detalle = explicacion_gemini
+
+    recalc_hoy = {'dia': dia_hoy, 'decision': decision, 'detalle': detalle,
+                  'sesion': sesion_hoy_txt}
+    _ss = st.session_state.get('sleep_score')
+    st.caption(f"✓ Recalculado con: sueño {st.session_state['sueno']:.1f} h · "
+               f"Body Battery {st.session_state['bb']} · estrés {st.session_state['stress']}"
+               + (f" · Sleep Score {int(_ss)} («{sleep_score_label(_ss)}»)" if _ss is not None else '')
+               + (' · te sientes enfermo' if st.session_state.get('enfermo') else '')
+               + (f" · sesión de hoy: {sesion_hoy_txt}" if sesion_hoy_txt else ''))
+    nivel = {'MANTENER': st.success, 'SUAVIZAR HOY': st.warning,
+             'DESCANSO HOY': st.error}[decision]
+    nivel(f"**Recomendación recalculada — {dia_hoy} · {decision}**\n\n"
+          f"Motivos: {', '.join(motivos)}.\n\n{detalle}\n\n"
+          f"_Abajo, en «Tu semana», la sesión de hoy queda marcada con este ajuste._")
+
+# ---------------- Forma y rumbo ----------------
+st.subheader(t('h_forma'))
+if not fitness.empty:
+    st.pyplot(grafico_forma(fitness))
+    ctl = fitness['CTL'].iloc[-1]
+    atl = fitness['ATL'].iloc[-1] if 'ATL' in fitness.columns else float('nan')
+    tsb = fitness['TSB'].iloc[-1] if 'TSB' in fitness.columns else ctl - atl
+    if tsb > 25:
+        banda, col_fn = 'demasiado fresco — riesgo de desentrenar si se mantiene', st.warning
+    elif tsb > 5:
+        banda, col_fn = 'fresco, a punto para competir (zona de taper)', st.success
+    elif tsb >= -10:
+        banda, col_fn = 'en equilibrio — carga de mantenimiento', st.info
+    elif tsb >= -30:
+        banda, col_fn = 'carga productiva — estás construyendo forma; esta fatiga es normal y buscada', st.info
+    else:
+        banda, col_fn = 'sobrecarga — fatiga alta, conviene aliviar para no arriesgar lesión', st.error
+    col_fn(f"**Tu frescura hoy: TSB = {tsb:+.1f}** (referencia 0). {banda}.\n\n"
+           f"CTL/Fitness {ctl:.0f} · ATL/Fatiga {atl:.0f}. El TSB es la resta (forma − fatiga): "
+           f"por encima de 0 estás descansado, por debajo estás cargado.")
+else:
+    st.caption('Sin datos de fitness: ejecuta el notebook para generar salidas/.')
+    ctl = 50.0
+
+st.subheader(t('h_rumbo'))
+st.pyplot(grafico_fases(per['fase'], per['semana_actual'], per['semanas_totales']))
+_sim_txt = (' · 🎛️ modo simulación (semana forzada para la demo)' if semana_sim
+            else ' · la semana avanza sola con el calendario desde tu fecha de inicio')
+st.caption(f"📅 Estás en la **semana {per['semana_actual']} de {per['semanas_totales']}** "
+           f"del plan · faltan {per['semanas_restantes']} semanas para tu 70.3 "
+           f"({fecha_comp:%d %b %Y}){_sim_txt}.")
+_desc_fase = next((d for n, _c, _ca, d in FASES_INFO if n == NOMBRE_FASE.get(per['fase'], '')), '')
+st.markdown(
+    f"**Fase actual: {NOMBRE_FASE.get(per['fase'], per['fase'])}** — {_desc_fase}.  \n"
+    "Carga por fase (la altura/intensidad del color lo refleja): "
+    "🔵 **Base** volumen alto, intensidad baja · "
+    "🟢 **Construcción** sube la intensidad · "
+    "🔴 **Pico** carga máxima · "
+    "🟠 **Taper** descarga para llegar fresco · "
+    "🟣 **70.3** carrera.")
+ramp = (CTL_OBJETIVO_70_3 - ctl) / max(per['semanas_restantes'], 1)
+if per['fase'] in ('TAPERING', 'COMPETENCIA'):
+    progreso = 'fase final: mantener, no construir'
+elif ramp <= 0:
+    progreso = 'objetivo de forma alcanzado'
+elif ramp <= 3:
+    progreso = 'en ruta'
+elif ramp <= 6:
+    progreso = 'justo: evitar semanas perdidas'
+else:
+    progreso = 'riesgo: forma lejos del objetivo'
+st.caption(f"CTL {ctl:.0f} → objetivo {CTL_OBJETIVO_70_3} · rampa necesaria "
+           f"{max(ramp, 0):+.1f}/semana · **{progreso}** · faltan "
+           f"{per['semanas_restantes']} semanas ({fecha_comp:%d %b %Y})")
+
+# ---------------- Progreso por disciplina (interactivo) ----------------
+_idx_prog, _kpis = progreso_semanal(acts, fecha_inicio)
+if _idx_prog is not None:
+    st.subheader(f"📈 {t('h_progreso')}")
+    # KPIs: ritmo actual y mejora por disciplina
+    cols = st.columns(len(_kpis))
+    for col, (n, (va, pct)) in zip(cols, _kpis.items()):
+        unidad = '/100m' if n == 'Natación' else 'km/h'
+        val = (pace_swim(va) if n == 'Natación' else f'{va:.1f} km/h')
+        col.metric(n, val, f'{pct:+.0f}% vs inicio')
+    st.caption('**Índice de progreso semanal** (primera semana de uso = 100), construido con tus '
+               'actividades **desde que empezaste el plan**. Cada línea sube a medida que mejora tu '
+               'ritmo medio de esa disciplina; pasa el cursor por la línea para ver cada semana. '
+               'Una pendiente ascendente significa que el plan te acerca a tu objetivo de forma gradual.')
+    st.line_chart(_idx_prog, height=280, y_label='Índice de progreso (sem 1 = 100)',
+                  x_label='Semana')
+    _suben = [n for n, (_, p) in _kpis.items() if p > 1]
+    if _suben:
+        st.success('📈 Mejorando en ' + ', '.join(_suben) +
+                   '. La tendencia al alza confirma que el plan funciona: progreso gradual, '
+                   'sin saltos bruscos, hacia tu 70.3.')
+else:
+    st.subheader(f"📈 {t('h_progreso')}")
+    st.info('📊 Tu evolución por disciplina aparecerá aquí a medida que entrenes. El gráfico recoge '
+            'tus actividades **desde que empezaste el plan**, así que al principio (semana 1) aún no '
+            'hay datos suficientes: necesitas al menos **2 semanas** de actividad para ver la tendencia. '
+            'Vuelve tras acumular algunas sesiones.')
+
+# ---------------- Zonas ----------------
+st.subheader(t('h_zonas'))
+st.pyplot(grafico_zonas(zonas))
+st.info(f"✓ **Ritmos validados con tu historial** — {zonas['fuente_z2']}.")
+if infer:
+    partes = []
+    if infer.get('perfil_nombre'):
+        partes.append(f"perfil **{infer['perfil_nombre']}** (KMeans)")
+    if infer.get('bici_pred_kmh'):
+        partes.append(f"bici estimada por XGBoost **{infer['bici_pred_kmh']:.1f} km/h**")
+    if infer.get('run_pred_kmh'):
+        partes.append(f"carrera estimada **{pace_run(infer['run_pred_kmh'])}**")
+    if partes:
+        st.success('🧠 **Modelos del TFM activos** — ' + ' · '.join(partes) + '.')
+
+chips = [('Z2', f"{zonas['hr']['Z2'][0]}-{zonas['hr']['Z2'][1]} ppm", False),
+         ('Z4', f"{zonas['hr']['Z4'][0]}-{zonas['hr']['Z4'][1]} ppm", per['fase'] == 'BASE'),
+         ('Rodaje', pace_run(zonas['run_z2']), False),
+         ('Series', pace_run(zonas['run_z4']), per['fase'] == 'BASE'),
+         ('Bici Z2', f"{zonas['bici_z2']:.0f} km/h", False),
+         ('Natación', pace_swim(zonas['nat_z2']), False)]
+st.markdown(''.join(
+    f'<span class="chip{" off" if off else ""}"><div class="lab">{lab}</div>'
+    f'<div class="val">{val}</div></span>' for lab, val, off in chips),
+    unsafe_allow_html=True)
+if per['fase'] == 'BASE':
+    st.caption('Z4 y series tachadas: en fase de Base aún no se usan.')
+
+# ---------------- Plan semanal ----------------
+EMOJI_DEP = {'Natación': '🔵', 'Ciclismo': '🟢', 'Carrera': '🟠',
+             'Descanso': '⚪', 'Movilidad': '⚪', 'Competencia': '🏁'}
+
+
+def _render_sesion(s, recalc=None, hoy=False):
+    with st.container(border=True):
+        emoji = EMOJI_DEP.get(s['deporte'], '⚪')
+        pref = '🎯 **HOY** · ' if hoy else ''
+        try:
+            dur = s['dur_min']
+        except Exception:
+            dur = 0
+        linea = f"{pref}{emoji} **{s['dia']} — {s['deporte']}** · {s['tipo']}"
+        if dur:
+            linea += f" · {s['km']} km · {dur} min"
+        st.markdown(linea)
+        st.caption(s['detalle'])
+        if recalc and str(s['dia']).startswith(recalc['dia']) and recalc['decision'] != 'MANTENER':
+            (st.error if recalc['decision'] == 'DESCANSO HOY' else st.warning)(
+                f"🔁 Ajuste de hoy ({recalc['decision']}): {recalc['detalle']}")
+
+
+def _sesion_de_hoy(sesiones):
+    dia = DIAS_ES[pd.Timestamp.today().dayofweek]
+    for s in sesiones:
+        if str(s['dia']).startswith(dia):
+            return s
+    return None
+
+
+st.subheader(t('h_semana'))
+if recalc_hoy and recalc_hoy['decision'] != 'MANTENER':
+    aviso = st.error if recalc_hoy['decision'] == 'DESCANSO HOY' else st.warning
+    aviso(f"🔁 **Ajuste de hoy ({recalc_hoy['dia']} · {recalc_hoy['decision']})** — "
+          f"{recalc_hoy['detalle']}")
+ses_df = datos['sesiones_plan']
+# El plan sigue a la FUENTE: con Strava se genera en vivo (progresivo, según tus
+# actividades reales); en Local con BD se muestra el plan persistido del notebook.
+if (not usando_strava) and hay_datos and not ses_df.empty and atleta in ses_df['athlete'].values:
+    sem = ses_df[ses_df['athlete'] == atleta]
+    plan_tipo = sem['plan_tipo'].iloc[0]
+    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+                f'{plan_tipo} · fase {per["fase"].capitalize()}</span>',
+                unsafe_allow_html=True)
+    sesiones_sem = [row for _, row in sem.iterrows()]
+    _hoy = _sesion_de_hoy(sesiones_sem)
+    if _hoy is not None:
+        st.markdown('**🎯 Tu entrenamiento de hoy**')
+        _render_sesion(_hoy, recalc_hoy, hoy=True)
+    # Resumen de la semana ARRIBA, antes del detalle día a día
+    pl = datos['planes_semanales']
+    fila = pl[pl['athlete'] == atleta].iloc[0] if not pl.empty else None
+    if fila is not None:
+        st.caption('Resumen de la semana')
+        c = st.columns(6)
+        for col, (lab, val) in zip(c, [
+                ('Sesiones', f"{fila.get('sesiones_semana', '—')}"),
+                ('Volumen', min2t(fila.get('natacion_min', 0) + fila.get('ciclismo_min', 0)
+                                  + fila.get('carrera_min', 0)) + ' h'),
+                ('Natación', f"{fila.get('natacion_km', '—')} km"),
+                ('Ciclismo', f"{fila.get('ciclismo_km', '—')} km"),
+                ('Carrera', f"{fila.get('carrera_km', '—')} km"),
+                ('TSB', f"{fila.get('TSB', float('nan')):.1f}")]):
+            col.metric(lab, val)
+    st.caption('Tu semana completa, día a día:')
+    for s in sesiones_sem:
+        _render_sesion(s, recalc_hoy)
+else:
+    # Modo demo / sin notebook: el motor genera una semana ADAPTATIVA y progresiva
+    plan, meta = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo)
+    origen = 'datos Strava' if usando_strava else 'modo demo'
+    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+                f'Plan adaptativo ({origen}) · fase {per["fase"].capitalize()} · '
+                f'semana {meta["sem_idx"]} de {meta["sem_tot"]}</span>',
+                unsafe_allow_html=True)
+    base_txt = (f"tu frecuencia actual (~{meta['freq_act']:.0f} sesiones/sem) y "
+                if meta['freq_act'] else "tu perfil y ")
+    st.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
+               f"{base_txt}el avance del plan (semana {meta['sem_idx']}/{meta['sem_tot']}). "
+               "La frecuencia y el volumen suben de forma gradual hacia la carrera para evitar sobrecarga.")
+    if meta.get('descarga'):
+        st.info('🌙 **Semana de descarga (recuperación).** Cada 4 semanas (patrón 3:1) se '
+                'reduce el volumen ~40 % y se baja la intensidad para asimilar la carga '
+                'acumulada y supercompensar. No es perder forma: es cuando el cuerpo se adapta.')
+    if meta['nat_intro']:
+        st.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
+                   'por ser la disciplina más técnica del 70.3.')
+    _hoy = _sesion_de_hoy(plan)
+    if _hoy is not None:
+        st.markdown('**🎯 Tu entrenamiento de hoy**')
+        _render_sesion(_hoy, recalc_hoy, hoy=True)
+    # Resumen de la semana ARRIBA, antes del detalle día a día
+    ses_n = sum(1 for s in plan if s['deporte'] not in ('Descanso', 'Movilidad'))
+    vol = sum(s['dur_min'] for s in plan)
+    km_nat = sum(s['km'] for s in plan if s['deporte'] == 'Natación')
+    km_cic = sum(s['km'] for s in plan if s['deporte'] == 'Ciclismo')
+    km_car = sum(s['km'] for s in plan if s['deporte'] in ('Carrera', 'Competencia'))
+    c = st.columns(5)
+    for col, (lab, val) in zip(c, [('Sesiones', f"{ses_n}"),
+                                   ('Volumen', f"{min2t(vol)} h"),
+                                   ('Natación', f"{km_nat:.1f} km"),
+                                   ('Ciclismo', f"{km_cic:.0f} km"),
+                                   ('Carrera', f"{km_car:.1f} km")]):
+        col.metric(lab, val)
+    st.caption('Tu semana completa, día a día:')
+    for s in plan:
+        _render_sesion(s, recalc_hoy)
+
+# ---------------- ¿Por qué este plan? ----------------
+st.subheader(t('h_porque'))
+explicacion_plan = generar_explicacion_plan(atleta, perfil_tipo, per['fase'],
+                                            per['semanas_restantes'], ctl)
+if explicacion_plan:
+    st.info(f"💡 {explicacion_plan}")
+else:
+    st.info(f"💡 Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
+            f"con {per['semanas_restantes']} semanas para la competencia. "
+            f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas.")
+
+# ---------------- Plan de competencia ----------------
+if per['fase'] in ('COMPETENCIA', 'TAPERING'):
+    st.subheader('🏁 Plan de carrera, km a km')
+    st.caption('La FC manda sobre el ritmo. Bici progresiva hasta recuperar pulsaciones tras la natación.')
+    seg, resumen = plan_competencia(zonas, objetivo)
+    disciplina = None
+    for d_, tramo, txt in seg:
+        if d_ != disciplina:
+            disciplina = d_
+            st.markdown(f'**{disciplina}**')
+        st.markdown(f'- `{tramo}` — {txt}')
+    st.success(f'⏱ Tiempo estimado: {resumen}')
+
+# ---------------- Glosario ----------------
+with st.expander('ⓘ Para entender tu plan (glosario)'):
+    for k, v in GLOSARIO.items():
+        st.markdown(f'**{k}** — {v}')
+
+st.caption('Demostrador del TFM «Sistema de Análisis Fisiológico y Planificación '
+           'Adaptativa — Triatlón 70.3». El LLM/plantillas explican; los modelos deciden.')
