@@ -734,52 +734,135 @@ def calcular_zonas(perfil_row, acts, perfil_tipo='nuevo', pred_bici=np.nan):
     fc_rep = p.get('resting_hr', np.nan)
     if pd.isna(fc_rep):
         fc_rep = 55.0
-    fcr = fc_max - fc_rep
-
+    # Zonas por % de FC MÁXIMA (convención por defecto de Garmin/Polar/Coros), para
+    # que coincidan con lo que el atleta ve en su reloj. Antes se usaba % de FC de
+    # reserva (Karvonen), que da valores ~15-20 ppm más altos y NO casaba con el
+    # reloj: inflaba Z1/Z2 y dejaba fuera las carreras fáciles reales, lo que
+    # estimaba un ritmo de rodaje demasiado lento.
     def _hr(lo, hi):
-        return (int(fc_rep + fcr * lo), int(fc_rep + fcr * hi))
+        return (int(fc_max * lo), int(fc_max * hi))
 
     hr = {'Z1': _hr(.50, .60), 'Z2': _hr(.60, .70), 'Z3': _hr(.70, .80),
           'Z4': _hr(.80, .90), 'Z5': _hr(.90, 1.0)}
 
-    v_run = p.get('pace_running_kmh', np.nan)
-    if pd.isna(v_run):
-        v_run = 9.2
+    # ------------------------------------------------------------------
+    # Ritmos por disciplina derivados del HISTORIAL REAL (modelo de coach):
+    #   · ritmo FÁCIL  = mediana de actividades en banda aeróbica de FC
+    #     (carrera 65-78 % FCmáx ≈ zona "Easy" de Daniels; bici 60-75 %).
+    #   · ritmo UMBRAL = mediana en banda 83-92 % FCmáx (o p80 de velocidad).
+    #   El resto de zonas se derivan del umbral, como en el sistema VDOT.
+    #   Si no hay FC suficiente, se usan cuantiles de velocidad (robusto).
+    # ------------------------------------------------------------------
+    def _ritmos(d, easy=(0.65, 0.78), thr=(0.83, 0.92), q_thr=0.80, q_easy=0.35):
+        if d is None or d.empty or 'avg_speed_kmh' not in d.columns:
+            return np.nan, np.nan, 0
+        s = d['avg_speed_kmh'].dropna()
+        s = s[s > 0]
+        if s.empty:
+            return np.nan, np.nan, 0
+        # Ventana RECIENTE (8 semanas) para el ritmo FÁCIL → refleja tu forma
+        # ACTUAL: al re-sincronizar Strava cada semana, el ritmo sube con tu
+        # progreso real. El UMBRAL se toma del histórico completo (necesita
+        # esfuerzos fuertes, más escasos). Si hay poca data reciente, usa todo.
+        d_rec = d
+        if 'date' in d.columns:
+            dt = pd.to_datetime(d['date'], utc=True, errors='coerce')
+            ref = dt.max()
+            if pd.notna(ref):
+                m = dt >= (ref - pd.Timedelta(days=56))
+                if m.sum() >= 4:
+                    d_rec = d[m]
+        v_e = v_t = np.nan
+        n_e = 0
+        if 'avg_hr' in d.columns and fc_max:
+            if d_rec['avg_hr'].notna().sum() >= 3:
+                pe = d_rec['avg_hr'] / fc_max
+                e = d_rec.loc[pe.between(*easy), 'avg_speed_kmh'].dropna()
+                n_e = len(e)
+                if len(e) >= 3:
+                    v_e = float(e.median())
+            if d['avg_hr'].notna().sum() >= 5:
+                pt = d['avg_hr'] / fc_max
+                tt = d.loc[pt.between(*thr), 'avg_speed_kmh'].dropna()
+                if len(tt) >= 3:
+                    v_t = float(tt.median())
+        if np.isnan(v_t):
+            v_t = float(s.quantile(q_thr))
+        if np.isnan(v_e):
+            s_rec = d_rec['avg_speed_kmh'].dropna()
+            s_rec = s_rec[s_rec > 0]
+            v_e = float(min((s_rec if not s_rec.empty else s).quantile(q_easy), v_t * 0.85))
+        v_e = float(min(v_e, v_t * 0.95))   # coherencia: fácil siempre < umbral
+        return v_e, v_t, n_e
 
-    # Validación del ritmo Z2 contra el historial (Karvonen inverso)
-    v_run_z2, fuente_z2 = np.nan, 'estimado (sin historial suficiente)'
-    if not acts.empty and {'sport', 'avg_hr', 'avg_speed_kmh'} <= set(acts.columns):
-        runs = acts[acts['sport'] == 'RUNNING'].dropna(subset=['avg_hr', 'avg_speed_kmh'])
-        en_z2 = runs[runs['avg_hr'].between(hr['Z2'][0], hr['Z2'][1])]
-        if len(en_z2) >= 3:
-            v_run_z2 = en_z2['avg_speed_kmh'].median()
-            fuente_z2 = f'validado con {len(en_z2)} carreras reales en Z2 de tu historial'
-        elif not runs.empty:
-            f_obs = (runs['avg_hr'].mean() - fc_rep) / fcr
-            if f_obs > 0:
-                corr = float(np.clip(0.65 / f_obs, 0.72, 1.0))
-                v_run_z2 = v_run * corr
-                fuente_z2 = (f'corregido por FC: tu historial va al {f_obs*100:.0f}% de '
-                             f'reserva cardiaca (Z3-Z4), no a ritmo de rodaje')
-    if pd.isna(v_run_z2):
-        v_run_z2 = v_run * 0.93
-    if perfil_tipo == 'nuevo':
-        v_run_z2 *= 0.95
-        fuente_z2 += ' · margen -5% por perfil nuevo'
+    runs = cyc = swims = pd.DataFrame()
+    if not acts.empty and 'sport' in acts.columns:
+        runs = acts[acts['sport'] == 'RUNNING']
+        cyc = acts[acts['sport'] == 'CYCLING']
+        swims = acts[acts['sport'] == 'SWIMMING']
 
-    v_bici = pred_bici if not pd.isna(pred_bici) else p.get('pace_cycling_kmh', np.nan)
-    if pd.isna(v_bici):
-        v_bici = 25.0
-    v_nat = p.get('pace_swimming_kmh', np.nan)
-    if pd.isna(v_nat):
-        v_nat = 2.6
+    # CARRERA
+    v_run_easy, v_run_thr, n_e_run = _ritmos(runs)
+    if np.isnan(v_run_easy):
+        v0 = p.get('pace_running_kmh', np.nan)
+        v0 = 9.2 if pd.isna(v0) else v0
+        v_run_thr, v_run_easy = v0 * 1.05, v0 * 0.90
+        fuente_z2 = 'estimado a partir de tu perfil (sin FC en el historial)'
+    elif n_e_run >= 3:
+        fuente_z2 = f'validado con {n_e_run} carreras reales en banda aeróbica (65-78 % FCmáx)'
+    else:
+        fuente_z2 = 'estimado por cuantiles de velocidad de tu historial'
+
+    # CICLISMO
+    v_bike_easy, v_bike_thr, _ = _ritmos(cyc, easy=(0.60, 0.75), thr=(0.83, 0.92))
+    if np.isnan(v_bike_easy):
+        vb = pred_bici if not pd.isna(pred_bici) else p.get('pace_cycling_kmh', np.nan)
+        vb = 25.0 if pd.isna(vb) else vb
+        v_bike_thr, v_bike_easy = vb, vb * 0.82
+
+    # NATACIÓN (la FC en piscina es poco fiable → cuantiles de velocidad)
+    if not swims.empty and 'avg_speed_kmh' in swims.columns:
+        ss = swims['avg_speed_kmh'].dropna()
+        ss = ss[ss > 0]
+        v_nat_easy = float(ss.median()) if not ss.empty else np.nan
+        v_nat_thr = float(ss.quantile(0.80)) if not ss.empty else np.nan
+    else:
+        v_nat_easy = v_nat_thr = np.nan
+    if np.isnan(v_nat_easy):
+        vn = p.get('pace_swimming_kmh', np.nan)
+        vn = 2.6 if pd.isna(vn) else vn
+        v_nat_easy, v_nat_thr = vn, vn * 1.08
+
+    # ------------------------------------------------------------------
+    # GUARDRAILS fisiológicos orientados al 70.3: un historial escaso o no
+    # representativo (p. ej. pocas salidas de bici, todas muy lentas) no debe
+    # producir objetivos imposibles para completar la prueba (90 km en bici no
+    # se entrenan a 9 km/h). Son pisos suaves hacia las demandas de la carrera.
+    # ------------------------------------------------------------------
+    if len(cyc) < 6:   # casi sin historial de bici → objetivo orientado a la meta
+        base_thr = pred_bici if not pd.isna(pred_bici) else 27.0
+        v_bike_thr = max(v_bike_thr, base_thr)
+        v_bike_easy = v_bike_thr * 0.82
+    v_run_easy = max(v_run_easy, 7.0)                 # ≥ ~8:34/km (no objetivos de caminar)
+    v_run_thr = max(v_run_thr, v_run_easy * 1.08)
+    v_bike_easy = max(v_bike_easy, 18.0)              # piso de rodaje de bici para 70.3
+    v_bike_thr = max(v_bike_thr, v_bike_easy * 1.08, 22.0)
+    v_nat_easy = max(v_nat_easy, 2.2)
+    v_nat_thr = max(v_nat_thr, v_nat_easy * 1.05)
+
+    v_bici_obj = pred_bici if not pd.isna(pred_bici) else v_bike_thr * 0.95
+    v_bici_obj = max(v_bici_obj, 22.0)                # ritmo de bici mínimo de carrera
+
+    # Ritmo objetivo de carrera del 70.3: entre el fácil y el umbral (esfuerzo
+    # sostenible de media-larga distancia). Garantiza fácil < objetivo < umbral.
+    v_run_obj = float(min(v_run_thr * 0.96, v_run_easy * 1.04))
 
     return {'fc_max': int(fc_max), 'fc_rep': int(fc_rep), 'hr': hr,
             'fuente_z2': fuente_z2, 'perfil': perfil_tipo,
-            'run_z2': v_run_z2, 'run_z3': v_run, 'run_z4': v_run * 1.10,
-            'run_obj': v_run, 'bici_obj': v_bici, 'nat_obj': v_nat,
-            'bici_z2': v_bici * 0.82, 'bici_z4': v_bici,
-            'nat_z2': v_nat, 'nat_z4': v_nat * 1.08}
+            'run_z2': v_run_easy, 'run_z3': v_run_thr * 0.92, 'run_z4': v_run_thr,
+            'run_obj': v_run_obj, 'bici_obj': v_bici_obj, 'nat_obj': v_nat_easy,
+            'bici_z2': v_bike_easy, 'bici_z4': v_bike_thr,
+            'nat_z2': v_nat_easy, 'nat_z4': v_nat_thr}
 
 
 def calcular_fase(fecha_comp, perfil_tipo, fecha_inicio=None, semana_sim=None):
@@ -969,6 +1052,17 @@ def frecuencia_y_disciplinas(acts):
     return None, disc
 
 
+def factor_mejora(per, perfil_tipo):
+    """Factor de mejora del ritmo según el avance del plan (mismo pulso, ritmo más
+    rápido por adaptación aeróbica). Mayor en principiantes. Se usa tanto en los
+    ritmos que se MUESTRAN como en los del plan, para que sean coherentes."""
+    sem_tot = max(int(per.get('semanas_totales', 24)), 1)
+    sem_idx = min(max(int(per.get('semana_actual', 1)), 1), sem_tot)
+    prog = sem_idx / sem_tot
+    tope = 0.10 if perfil_tipo == 'nuevo' else 0.05
+    return 1.0 + tope * prog
+
+
 def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     """Plan semanal ADAPTATIVO orientado a COMPLETAR un 70.3 (1,9-90-21,1 km).
 
@@ -977,8 +1071,11 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     - Incluye BRICK (bici+carrera encadenadas), la sesión clave del 70.3, en
       Construcción y Pico.
     - Frecuencia y carga suben de forma gradual según la semana y la fase.
-    - El sexo ajusta las velocidades objetivo (brecha de rendimiento ~7-10 %),
-      por lo que las distancias difieren ligeramente entre hombre y mujer.
+    - Los ritmos objetivo PROGRESAN con las semanas (mismo pulso, ritmo más
+      rápido) y salen de los datos del propio atleta y del modelo (que ya
+      incluye el sexo); no se les aplica una penalización extra por sexo.
+    - 1-2 bricks/semana en construcción y pico: largo el sábado y mini-brick en
+      pico el miércoles, con la carrera del brick creciendo hacia la distancia.
     """
     fase = per.get('fase', 'BASE')
     sem_tot = max(int(per.get('semanas_totales', 24)), 1)
@@ -1018,13 +1115,25 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
         vol *= 0.6
         intens = False
 
-    # Velocidades objetivo, ajustadas por sexo (brecha de rendimiento documentada)
-    sx = 1.0 if sexo == 'M' else 0.93
-    v_b2, v_b4 = zonas['bici_z2'] * sx, zonas['bici_z4'] * sx
-    v_run, v_run4 = zonas['run_z2'] * sx, zonas['run_z4'] * sx
-    v_nat = zonas['nat_z2'] * sx
+    # Progresión de ritmos: a igual pulso, el ritmo mejora con las semanas por
+    # adaptación aeróbica (la esencia de un plan de entrenamiento). El tope de
+    # mejora es mayor en perfiles nuevos. Los ritmos base ya provienen de los
+    # datos del propio atleta y del modelo (que incluye el sexo), por lo que NO
+    # se aplica aquí un factor de sexo: hacerlo penalizaba dos veces a la mujer.
+    mejora = factor_mejora(per, perfil_tipo)
+    v_b2, v_b4 = zonas['bici_z2'] * mejora, zonas['bici_z4'] * mejora
+    # Ritmos de carrera DIFERENCIADOS por tipo de sesión (no todos al mismo ritmo):
+    #   fácil/rodaje y tirada larga = Z2; objetivo 70.3 (brick y final de la larga);
+    #   tempo = Z3; series = Z4. Todos progresan con las semanas (factor mejora).
+    v_run = zonas['run_z2'] * mejora        # fácil / rodaje / base de la tirada larga
+    v_run3 = zonas['run_z3'] * mejora       # tempo (Z3)
+    v_run4 = zonas['run_z4'] * mejora       # series (Z4)
+    v_robj = zonas['run_obj'] * mejora      # ritmo OBJETIVO de carrera 70.3
+    v_nat = zonas['nat_z2'] * mejora
     hrz2 = f"{zonas['hr']['Z2'][0]}-{zonas['hr']['Z2'][1]} ppm"
     rz2 = pace_run(v_run)
+    robj = pace_run(v_robj)
+    rz4 = pace_run(v_run4)
     nz2 = pace_swim(v_nat)
 
     def dur(peak):
@@ -1038,23 +1147,76 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
 
     nat_intro = bool(disciplinas) and 'SWIMMING' not in disciplinas
 
-    # --- Sábado: FONDO de bici (+ BRICK de carrera en construcción/pico) ---
-    bike_long = dur(220)                       # pico ≈ 3,5 h → cerca de los 90 km
-    brick_run = dur(25) if intens else 0
-    if intens and brick_run:
-        sab = {'dia': 'Sábado', 'deporte': 'Ciclismo', 'tipo': 'fondo + BRICK',
-               'dur_min': bike_long + brick_run, 'km': kb(bike_long, v_b2),
-               'detalle': (f'🔑 BRICK (sesión clave del 70.3): fondo de '
-                           f'{kb(bike_long, v_b2):.0f} km de bici a {v_b2:.0f} km/h en Z2 '
-                           f'({hrz2}) y, SIN parar, {brick_run} min de carrera a {rz2} con '
-                           f'"piernas de cemento". Entrena la transición T2 y la resistencia '
-                           f'específica. Come e hidrátate como en carrera.')}
+    # --- Miércoles: bici de calidad (+ mini-BRICK de transición en PICO) ---
+    # Segundo estímulo bici→carrera de la semana. Los expertos recomiendan 1-2
+    # bricks por semana en construcción/pico: uno largo (sábado) y, en pico, un
+    # mini-brick de transición (10-15 min) para reforzar el patrón neuromuscular.
+    mie_bike = dur(85)
+    # Mini-brick en TODA Construcción y Pico (no solo Pico): así hay 2 bricks/semana
+    # (sábado largo + miércoles corto), dentro del rango 1-2/sem que recomiendan los
+    # entrenadores en las fases específicas. La transición se corre a ritmo objetivo.
+    mini_brick = dur(15) if intens else 0
+    if intens and mini_brick:
+        mie = {'dia': 'Miércoles', 'deporte': 'Ciclismo', 'tipo': 'series Z4 + mini-BRICK',
+               'dur_min': mie_bike + mini_brick, 'km': kb(mie_bike, v_b4),
+               'detalle': (f'4x8 min en Z4 a ~{v_b4:.0f} km/h (4 min suaves entre series) y, '
+                           f'al bajar de la bici, {mini_brick} min de transición a {robj} '
+                           f'(ritmo objetivo). 2º estímulo bici→carrera de la semana.')}
+    elif intens:
+        mie = {'dia': 'Miércoles', 'deporte': 'Ciclismo', 'tipo': 'series Z4',
+               'dur_min': mie_bike, 'km': kb(mie_bike, v_b4),
+               'detalle': f'4x8 min en Z4 a ~{v_b4:.0f} km/h, 4 min suaves entre series.'}
     else:
+        mie = {'dia': 'Miércoles', 'deporte': 'Ciclismo', 'tipo': 'rodaje Z2',
+               'dur_min': mie_bike, 'km': kb(mie_bike, v_b2),
+               'detalle': f'Rodaje a {v_b2:.0f} km/h en Z2, cadencia 85-95 rpm.'}
+
+    # --- Sábado: FONDO de bici + BRICK de carrera ---
+    # El brick NO se limita a Construcción/Pico: se introduce ya en Base tardío
+    # (suave) y se mantiene casi todas las semanas, también en descarga (más corto,
+    # porque es una sesión de ESPECIFICIDAD y técnica, no solo de carga). La carrera
+    # del brick crece de ~15-20 min (Base) a ~45-50 min (Pico) — rango 30-60 min
+    # recomendado para 70.3; 20 min en Pico no prepara una carrera de >2 h.
+    bike_long = dur(220)                       # pico ≈ 3,5 h → cerca de los 90 km
+    hay_brick = (fase in ('BASE', 'CONSTRUCCION', 'PICO')) and prog >= 0.25
+    if hay_brick:
+        brick_peak = 55 if intens else 30      # carrera del brick objetivo (min)
+        brick_run = dur(brick_peak)
+        clave = '🔑 ' if intens else ''
+        modo = 'sesión clave del 70.3' if intens else 'brick introductorio suave'
+        sab = {'dia': 'Sábado', 'deporte': 'Ciclismo',
+               'tipo': 'fondo + BRICK' if intens else 'fondo + brick suave',
+               'dur_min': bike_long + brick_run, 'km': kb(bike_long, v_b2),
+               'detalle': (f'{clave}BRICK ({modo}): fondo de '
+                           f'{kb(bike_long, v_b2):.0f} km de bici a {v_b2:.0f} km/h en Z2 '
+                           f'({hrz2}) y, SIN parar, {brick_run} min de carrera a {robj} '
+                           f'(ritmo OBJETIVO 70.3, {brick_run/60*v_robj:.1f} km) con "piernas '
+                           f'de cemento": aquí ensayas tu ritmo de carrera con fatiga. Crece '
+                           f'semana a semana. Come e hidrátate como en competencia.')}
+    else:
+        brick_run = 0
         sab = {'dia': 'Sábado', 'deporte': 'Ciclismo', 'tipo': 'fondo Z2',
                'dur_min': bike_long, 'km': kb(bike_long, v_b2),
                'detalle': (f'Fondo de {kb(bike_long, v_b2):.0f} km a {v_b2:.0f} km/h en Z2 '
                            f'({hrz2}). Construye la resistencia aeróbica de base hacia los 90 km; '
                            f'practica comida e hidratación de carrera.')}
+
+    # --- Domingo: TIRADA LARGA orientada a distancia (tiempo en pie) ---
+    # Construye hacia ~18 km en pico (recomendación 70.3: 16-20 km, no media maratón
+    # completa), con tope de 140 min para no castigar a corredores lentos. Es
+    # progresiva: arranca fácil (Z2) y termina los últimos km a ritmo objetivo.
+    larga_km = 18.0 * min(prog / 0.85, 1.0)
+    if es_descarga:
+        larga_km *= 0.7
+    larga_min = int(round(min(max(larga_km / max(v_run, 1) * 60, 40), 140) / 5) * 5)
+    larga_km = round(larga_min / 60 * v_run, 1)
+    finish_km = max(round(min(larga_km * 0.3, 6.0), 1), 1.0)
+    dom = {'dia': 'Domingo', 'deporte': 'Carrera', 'tipo': 'tirada larga progresiva',
+           'dur_min': larga_min, 'km': larga_km,
+           'detalle': (f'Tirada larga de {larga_km:.1f} km ({larga_min} min): arranca cómodo '
+                       f'a {rz2} en Z2 ({hrz2}) y corre los últimos ~{finish_km:.0f} km a '
+                       f'{robj} (ritmo objetivo del 70.3). Construye resistencia y enseña a '
+                       f'tu cuerpo a correr a ritmo de carrera ya cansado, hacia los 21,1 km.')}
 
     catalogo = [
         ('Sábado', sab),
@@ -1063,20 +1225,14 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
                     'detalle': f'Series de resistencia a {nz2} (técnica y respiración bilateral). '
                                f'Construye los 1,9 km de la carrera.'
                                + (' Empieza por aquí: aún no registras natación.' if nat_intro else '')}),
-        ('Domingo', {'dia': 'Domingo', 'deporte': 'Carrera', 'tipo': 'tirada larga Z2',
-                     'dur_min': dur(110), 'km': kr(dur(110)),
-                     'detalle': f'Tirada larga progresiva de {kr(dur(110)):.1f} km a {rz2}, '
-                                f'terminando en Z2 alto. Resistencia para los 21,1 km.'}),
+        ('Domingo', dom),
         ('Martes', {'dia': 'Martes', 'deporte': 'Carrera',
                     'tipo': 'series Z4' if intens else 'rodaje Z2',
                     'dur_min': dur(55), 'km': kr(dur(55)),
-                    'detalle': (f'Calienta y haz 5x4 min en Z4 a {pace_run(v_run4)} con 2 min suaves.'
+                    'detalle': (f'Calienta y haz 5x4 min en Z4 a {rz4} (ritmo de series), '
+                                f'2 min suaves entre repeticiones.'
                                 if intens else f'Rodaje cómodo a {rz2} en Z2 ({hrz2}).')}),
-        ('Miércoles', {'dia': 'Miércoles', 'deporte': 'Ciclismo',
-                       'tipo': 'series Z4' if intens else 'rodaje Z2',
-                       'dur_min': dur(85), 'km': kb(dur(85), v_b4 if intens else v_b2),
-                       'detalle': (f'4x8 min en Z4 a ~{v_b4:.0f} km/h, 4 min suaves entre series.'
-                                   if intens else f'Rodaje a {v_b2:.0f} km/h en Z2, cadencia 85-95 rpm.')}),
+        ('Miércoles', mie),
         ('Viernes', {'dia': 'Viernes', 'deporte': 'Natación', 'tipo': 'técnica',
                      'dur_min': dur(45), 'km': ks(dur(45)),
                      'detalle': f'Técnica de brazada y pies; series cortas a {nz2}.'}),
@@ -1099,7 +1255,8 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
                          'detalle': 'Descanso o 15 min de movilidad. La adaptación ocurre hoy.'})
     meta = {'n_ses': n_ses, 'sem_idx': sem_idx, 'sem_tot': sem_tot,
             'freq_act': freq_act, 'disciplinas': disciplinas, 'nat_intro': nat_intro,
-            'tiene_brick': bool(intens and brick_run), 'descarga': es_descarga}
+            'tiene_brick': bool(hay_brick and brick_run),
+            'tiene_mini_brick': bool(intens and mini_brick), 'descarga': es_descarga}
     return plan, meta
 
 
@@ -1757,16 +1914,25 @@ if infer:
     if partes:
         st.success('🧠 **Modelos del TFM activos** — ' + ' · '.join(partes) + '.')
 
+# Los ritmos MOSTRADOS progresan igual que en el plan (mismo factor de mejora),
+# así que cambian semana a semana en vez de quedarse fijos.
+_mej = factor_mejora(per, perfil_tipo)
 chips = [('Z2', f"{zonas['hr']['Z2'][0]}-{zonas['hr']['Z2'][1]} ppm", False),
          ('Z4', f"{zonas['hr']['Z4'][0]}-{zonas['hr']['Z4'][1]} ppm", per['fase'] == 'BASE'),
-         ('Rodaje', pace_run(zonas['run_z2']), False),
-         ('Series', pace_run(zonas['run_z4']), per['fase'] == 'BASE'),
-         ('Bici Z2', f"{zonas['bici_z2']:.0f} km/h", False),
-         ('Natación', pace_swim(zonas['nat_z2']), False)]
+         ('Rodaje', pace_run(zonas['run_z2'] * _mej), False),
+         ('Series', pace_run(zonas['run_z4'] * _mej), per['fase'] == 'BASE'),
+         ('Bici Z2', f"{zonas['bici_z2'] * _mej:.0f} km/h", False),
+         ('Natación', pace_swim(zonas['nat_z2'] * _mej), False)]
 st.markdown(''.join(
     f'<span class="chip{" off" if off else ""}"><div class="lab">{lab}</div>'
     f'<div class="val">{val}</div></span>' for lab, val, off in chips),
     unsafe_allow_html=True)
+_mej_pico = factor_mejora({'semana_actual': per['semanas_totales'],
+                           'semanas_totales': per['semanas_totales']}, perfil_tipo)
+st.caption(f"📈 Los ritmos progresan con el plan: tu rodaje pasa de "
+           f"**{pace_run(zonas['run_z2'] * _mej)}/km** esta semana a "
+           f"**~{pace_run(zonas['run_z2'] * _mej_pico)}/km** en el pico "
+           f"(mismo pulso, más rápido por adaptación aeróbica).")
 if per['fase'] == 'BASE':
     st.caption('Z4 y series tachadas: en fase de Base aún no se usan.')
 
