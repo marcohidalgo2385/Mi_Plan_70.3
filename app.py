@@ -24,6 +24,12 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 try:
+    import plotly.graph_objects as go
+    PLOTLY_OK = True
+except ImportError:
+    PLOTLY_OK = False
+
+try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
 except ImportError:
@@ -44,20 +50,30 @@ except ImportError:
 # ----------------------------------------------------------------------------
 # Configuración general y estilos
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title='Mi plan 70.3', page_icon='🔴', layout='wide')
+st.set_page_config(page_title='Mi plan 70.3', page_icon='🔴', layout='centered')
 
 st.markdown("""
 <style>
-  .chip {display:inline-block; background:#fdf6ec; border:1px solid #f1e3c8;
+  /* Ocultar el "andamiaje" de Streamlit (sin tocar el header: en móvil contiene
+     el botón para abrir la barra lateral). toolbarMode="minimal" limpia el resto. */
+  #MainMenu, footer {visibility: hidden;}
+  .block-container {padding-top: 1.2rem; padding-bottom: 2rem;
+                    max-width: 820px;}
+  /* Paleta unificada (azul #1d6fa5 + acento cálido), coherente con el tema */
+  .chip {display:inline-block; background:#eef3f7; border:1px solid #d8e3ec;
          border-radius:12px; padding:10px 16px; margin:4px; text-align:center;}
-  .chip .lab {color:#b45309; font-weight:700; font-size:0.8rem;}
-  .chip .val {color:#262626; font-weight:700; font-size:1.0rem;}
-  .chip.off {background:#f4f3ef; border-color:#dddbd4;}
-  .chip.off .lab, .chip.off .val {color:#8a877f; text-decoration:line-through;}
+  .chip .lab {color:#1d6fa5; font-weight:700; font-size:0.8rem;}
+  .chip .val {color:#16202b; font-weight:700; font-size:1.0rem;}
+  .chip.off {background:#f3f4f6; border-color:#dfe3e8;}
+  .chip.off .lab, .chip.off .val {color:#9aa3ad; text-decoration:line-through;}
   .badge {display:inline-block; border-radius:14px; padding:4px 14px;
           font-weight:700; font-size:0.85rem;}
-  div[data-testid="stMetric"] {background:#ffffff; border:1px solid #e8e6e1;
+  div[data-testid="stMetric"] {background:#ffffff; border:1px solid #e2e8ee;
           border-radius:12px; padding:14px;}
+  /* Botones más "app": esquinas suaves y peso */
+  .stButton>button, .stDownloadButton>button {border-radius:10px; font-weight:700;}
+  /* Imágenes (gráficos) que se adaptan al ancho del móvil */
+  div[data-testid="stImage"] img {max-width:100%; height:auto;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -145,22 +161,38 @@ GLOSARIO = {
 ESTADO_PLAN_PATH = '.plan_estado.json'
 
 
-def leer_inicio_plan():
-    """Lee la fecha de inicio del plan persistida (o None si no existe)."""
+def _estado_plan_load():
+    """Carga el dict {user_key: fecha_inicio_iso} persistido (o {})."""
     try:
         import json
         with open(ESTADO_PLAN_PATH, encoding='utf-8') as f:
-            return date.fromisoformat(json.load(f)['fecha_inicio'])
+            data = json.load(f)
+        # Compatibilidad con el formato antiguo (clave única 'fecha_inicio')
+        if 'fecha_inicio' in data and isinstance(data['fecha_inicio'], str):
+            return {'demo': data['fecha_inicio']}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def leer_inicio_plan(user_key='demo'):
+    """Fecha de inicio persistida PARA ESE USUARIO (o None si no hay)."""
+    d = _estado_plan_load().get(user_key)
+    try:
+        return date.fromisoformat(d) if d else None
     except Exception:
         return None
 
 
-def guardar_inicio_plan(d):
-    """Persiste la fecha de inicio del plan para que no se reinicie cada día."""
+def guardar_inicio_plan(d, user_key='demo'):
+    """Fija la fecha de inicio del plan de ese usuario. Es el ANCLA del plan:
+    no cambia sola al pasar los días; solo se reescribe al reiniciar el plan."""
     try:
         import json
+        data = _estado_plan_load()
+        data[user_key] = pd.Timestamp(d).date().isoformat()
         with open(ESTADO_PLAN_PATH, 'w', encoding='utf-8') as f:
-            json.dump({'fecha_inicio': pd.Timestamp(d).date().isoformat()}, f)
+            json.dump(data, f)
     except Exception:
         pass
 
@@ -1278,6 +1310,27 @@ def grafico_forma(fd):
     return fig
 
 
+def grafico_forma_plotly(fd):
+    """Curva CTL/ATL/TSB interactiva (Plotly), responsiva y con hover unificado."""
+    fd = fd.tail(365)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=fd['date'], y=fd['CTL'], name='Fitness (CTL)',
+                             mode='lines', line=dict(color='#21a366', width=2.4)))
+    fig.add_trace(go.Scatter(x=fd['date'], y=fd['ATL'], name='Fatiga (ATL)',
+                             mode='lines', line=dict(color='#f97316', width=2.4)))
+    fig.add_trace(go.Scatter(x=fd['date'], y=fd['TSB'], name='Frescura (TSB)',
+                             mode='lines', line=dict(color='#1d6fa5', width=1.8, dash='dot')))
+    fig.add_hline(y=0, line=dict(color='#d8d5cd', width=1))
+    fig.update_layout(height=300, margin=dict(l=8, r=8, t=10, b=8),
+                      legend=dict(orientation='h', yanchor='bottom', y=1.0, x=0,
+                                  font=dict(size=12)),
+                      paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                      hovermode='x unified', font=dict(size=12, color='#5b6670'))
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)', zeroline=False)
+    return fig
+
+
 def grafico_progreso(acts):
     """Evolución del ritmo medio por disciplina a lo largo del tiempo, con su
     tendencia. Muestra el progreso del atleta y devuelve (fig, % mejora por disciplina)."""
@@ -1369,6 +1422,26 @@ def grafico_zonas(z):
     for s in ('top', 'right', 'left'):
         ax.spines[s].set_visible(False)
     fig.tight_layout()
+    return fig
+
+
+def grafico_zonas_plotly(z):
+    """Barra de zonas de FC interactiva (Plotly): cada tramo Z1-Z5 con su rango."""
+    fig = go.Figure()
+    for zona, (lo, hi) in z['hr'].items():
+        fig.add_trace(go.Bar(
+            y=['FC'], x=[hi - lo], base=[lo], orientation='h', width=0.6,
+            marker=dict(color=GARMIN_COLORS[zona]),
+            text=[f"{zona}<br>{lo}-{hi}"], textposition='inside',
+            insidetextanchor='middle', textfont=dict(color='white', size=12),
+            hovertemplate=f"{zona}: {lo}-{hi} ppm<extra></extra>", showlegend=False))
+    fig.update_layout(barmode='overlay', height=130, margin=dict(l=8, r=8, t=6, b=28),
+                      paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                      font=dict(size=12, color='#5b6670'),
+                      xaxis=dict(title='pulsaciones por minuto (ppm)',
+                                 range=[z['hr']['Z1'][0] - 8, z['hr']['Z5'][1] + 8],
+                                 showgrid=False),
+                      yaxis=dict(showticklabels=False))
     return fig
 
 
@@ -1540,21 +1613,43 @@ with st.sidebar:
     st.divider()
     st.markdown(f'**{t("tu_objetivo")}**')
 
-    # Fecha de inicio PERSISTENTE: se fija al iniciar el plan y no cambia sola al
-    # pasar los días. Solo se mueve con «Reiniciar plan» (o editándola a mano).
-    if 'fecha_inicio_plan' not in st.session_state:
-        st.session_state['fecha_inicio_plan'] = leer_inicio_plan() or date.today()
-        guardar_inicio_plan(st.session_state['fecha_inicio_plan'])
+    # Fecha de inicio = ANCLA del plan. Se elige una vez, se FIJA (se bloquea) y no
+    # cambia sola al pasar los días; así la semana avanza de verdad y queda
+    # correlacionada con la fecha de competencia. Solo se cambia al reiniciar el plan.
+    # Persistencia POR USUARIO (por atleta de Strava; 'demo' si no hay conexión).
+    _uk = 'demo'
+    if st.session_state.get('strava_token'):
+        import hashlib
+        _uk = 'u' + hashlib.sha1(str(st.session_state['strava_token']).encode()).hexdigest()[:10]
+    if 'inicio_fijado' not in st.session_state:
+        _persisted = leer_inicio_plan(_uk)
+        st.session_state['inicio_plan_val'] = _persisted or date.today()
+        st.session_state['inicio_fijado'] = _persisted is not None
+
     cI, cR = st.columns([2, 1])
-    fecha_inicio = cI.date_input(
-        t('fecha_inicio'), key='fecha_inicio_plan',
-        help='Se fija al iniciar el plan; NO cambia sola al pasar los días, para que '
-             'la semana progrese de verdad. Usa «Reiniciar» para empezar hoy de cero.')
-    if cR.button(t('reiniciar'), help='Empezar el plan hoy (semana 1)'):
-        st.session_state['fecha_inicio_plan'] = date.today()
-        guardar_inicio_plan(date.today())
-        st.rerun()
-    guardar_inicio_plan(fecha_inicio)
+    if st.session_state['inicio_fijado']:
+        fecha_inicio = st.session_state['inicio_plan_val']
+        cI.date_input(t('fecha_inicio'), value=fecha_inicio, disabled=True,
+                      help='Fecha ancla del plan: fija y BLOQUEADA para que la semana avance '
+                           'día a día y siga correlacionada con tu 70.3. Pulsa «Reiniciar plan» '
+                           'para elegir otra.')
+        if cR.button(t('reiniciar'), help='Desbloquear para elegir una nueva fecha de inicio'):
+            st.session_state['inicio_fijado'] = False
+            st.rerun()
+        st.caption(f'🔒 Plan anclado al **{fecha_inicio:%d/%m/%Y}** (no se mueve solo). '
+                   'Reinícialo solo si vas a empezar de cero.')
+    else:
+        _sel = cI.date_input(t('fecha_inicio'), value=st.session_state['inicio_plan_val'],
+                             max_value=date.today(),
+                             help='Elige el día en que empiezas (o empezaste) el plan. '
+                                  'Al fijarla quedará bloqueada como ancla.')
+        fecha_inicio = _sel
+        if cR.button('🔒 Fijar', help='Bloquear esta fecha como inicio del plan'):
+            st.session_state['inicio_plan_val'] = _sel
+            st.session_state['inicio_fijado'] = True
+            guardar_inicio_plan(_sel, _uk)
+            st.rerun()
+        st.caption('Elige tu fecha de inicio y pulsa **🔒 Fijar** para anclar el plan.')
 
     usa_fecha = st.toggle(t('tengo_fecha'), value=True)
     if usa_fecha:
@@ -1568,11 +1663,12 @@ with st.sidebar:
     # Total de semanas reales del plan (límite del slider de simulación)
     sem_tot_plan = max(int(np.ceil((pd.Timestamp(fecha_comp) -
                                     pd.Timestamp(fecha_inicio)).days / 7)), 1)
-    sim_on = st.toggle('🎛️ Simular semana (demo)', value=False,
-                       help='Para la presentación: fuerza en qué semana del plan estás, '
-                            'sin depender de la fecha real. Recalcula fase, carga y plan.')
-    semana_sim = (st.slider('Semana actual (simulada)', 1, sem_tot_plan,
-                            min(6, sem_tot_plan)) if sim_on else None)
+    with st.expander('⚙️ Opciones avanzadas (demo)', expanded=False):
+        sim_on = st.toggle('🎛️ Simular semana', value=False,
+                           help='Para la presentación: fuerza en qué semana del plan estás, '
+                                'sin depender de la fecha real. Recalcula fase, carga y plan.')
+        semana_sim = (st.slider('Semana actual (simulada)', 1, sem_tot_plan,
+                                min(6, sem_tot_plan)) if sim_on else None)
 
     objetivo = None
     if perfil_tipo == 'experimentado':
@@ -1671,7 +1767,26 @@ if perfil_tipo == 'experimentado':
         zonas['bici_obj'] = objetivo['v_bici_obj']
         zonas['nat_obj'] = objetivo['v_nat_obj']
 
-# --- Panel de estado: de dónde salen los datos y si los modelos predicen ---
+# --- Tarjeta de la SESIÓN DE HOY (lo primero que el atleta quiere ver) ---
+_plan_hoy_card, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo)
+_dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+_ses_hoy_card = next((s for s in _plan_hoy_card if str(s['dia']).startswith(_dia_hoy)), None)
+if _ses_hoy_card:
+    _emo = {'Natación': '🏊', 'Ciclismo': '🚴', 'Carrera': '🏃', 'Descanso': '😴',
+            'Movilidad': '🧘', 'Competencia': '🏁'}.get(_ses_hoy_card['deporte'], '•')
+    _meta_line = (f"{_ses_hoy_card['km']} km · {_ses_hoy_card['dur_min']} min"
+                  if _ses_hoy_card.get('dur_min') else 'Día de descanso / recuperación')
+    st.markdown(
+        '<div style="background:#ffffff;border:1px solid #d8e3ec;border-left:6px solid #1d6fa5;'
+        'border-radius:14px;padding:16px 18px;margin:2px 0 18px;box-shadow:0 1px 6px rgba(11,42,74,.08);">'
+        '<div style="color:#1d6fa5;font-size:.72rem;font-weight:700;letter-spacing:2px;">TU SESIÓN DE HOY</div>'
+        f'<div style="font-size:1.25rem;font-weight:800;color:#16202b;margin-top:2px;">'
+        f'{_emo} {_ses_hoy_card["deporte"]} — {_ses_hoy_card["tipo"]}</div>'
+        f'<div style="color:#1d6fa5;font-weight:700;margin:2px 0 6px;">{_meta_line}</div>'
+        f'<div style="color:#3a4650;font-size:.9rem;line-height:1.35;">{_ses_hoy_card["detalle"]}</div>'
+        '</div>', unsafe_allow_html=True)
+
+# --- Estado del sistema (técnico): colapsado, para no abrumar al usuario final ---
 if usando_strava:
     fuente_ico, fuente_txt = '📱', t('opt_strava').replace('📱 ', '')
 elif fuente == 'garmin':
@@ -1681,32 +1796,33 @@ else:
 _em_estado, _em_msg = estado_modelos()
 _mod_val = {'activo': 'Activos ✅', 'sin_archivos': 'No encontrados ⚠️',
             'sin_librerias': 'Sin librerías ⛔'}[_em_estado]
-_s1, _s2, _s3 = st.columns(3)
-_s1.metric(t('m_fuente'), f'{fuente_ico} {fuente_txt}')
-_n_act = len(acts) if (acts is not None and not getattr(acts, 'empty', True)) else 0
-_s2.metric(t('m_acts'), f'{_n_act}' if _n_act else '—',
-           help='Tus actividades determinan: FC máxima y zonas, validación de ritmos, '
-                'la curva CTL/ATL/TSB, la frecuencia base del plan (sesiones/semana) y '
-                'las predicciones de los modelos. Más historial = plan más afinado.')
-_s3.metric(t('m_modelos'), _mod_val, help=_em_msg)
-if _em_estado == 'activo' and infer.get('perfil_nombre'):
-    st.caption(f"🧠 Inferencia activa — perfil **{infer['perfil_nombre']}** · "
-               f"bici estimada por XGBoost **{zonas['bici_obj']:.1f} km/h**.")
-elif _em_estado == 'sin_librerias':
-    st.caption(f"⛔ Modelos inactivos: {_em_msg}. (Las zonas/ritmos siguen siendo reales.)")
-elif _em_estado == 'sin_archivos':
-    st.caption(f"⚠️ Modelos inactivos: {_em_msg}. Coloca la carpeta `salidas/` "
-               "(con `modelos/`) junto a `app.py`.")
-_gem_ok = inicializar_gemini() is not None
-st.caption('🤖 Explicaciones IA (Gemini): **configurado** — el «¿Por qué este plan?» y el '
-           'ajuste del día se redactan en vivo.' if _gem_ok else
-           '🤖 Explicaciones IA (Gemini): inactivo — se usan plantillas (revisa `gemini_api_key`).')
-_sx = 'Mujer' if sexo == 'F' else 'Hombre'
-_sx_efecto = ('y las predicciones de ritmo (modelo XGBoost)' if (_em_estado == 'activo' and infer)
-              else '(sus predicciones se verán al activar los modelos)')
-st.caption(f'🚻 Sexo: **{_sx}** — ajusta la carga de entrenamiento (TRIMP de Banister) '
-           f'{_sx_efecto}. La estructura del plan y las zonas no cambian por sexo '
-           '(la FC máxima es independiente del sexo, Tanaka 2001).')
+with st.expander('ⓘ Estado del sistema (fuente de datos y modelos)', expanded=False):
+    _s1, _s2, _s3 = st.columns(3)
+    _s1.metric(t('m_fuente'), f'{fuente_ico} {fuente_txt}')
+    _n_act = len(acts) if (acts is not None and not getattr(acts, 'empty', True)) else 0
+    _s2.metric(t('m_acts'), f'{_n_act}' if _n_act else '—',
+               help='Tus actividades determinan: FC máxima y zonas, validación de ritmos, '
+                    'la curva CTL/ATL/TSB, la frecuencia base del plan (sesiones/semana) y '
+                    'las predicciones de los modelos. Más historial = plan más afinado.')
+    _s3.metric(t('m_modelos'), _mod_val, help=_em_msg)
+    if _em_estado == 'activo' and infer.get('perfil_nombre'):
+        st.caption(f"🧠 Inferencia activa — perfil **{infer['perfil_nombre']}** · "
+                   f"bici estimada por XGBoost **{zonas['bici_obj']:.1f} km/h**.")
+    elif _em_estado == 'sin_librerias':
+        st.caption(f"⛔ Modelos inactivos: {_em_msg}. (Las zonas/ritmos siguen siendo reales.)")
+    elif _em_estado == 'sin_archivos':
+        st.caption(f"⚠️ Modelos inactivos: {_em_msg}. Coloca la carpeta `salidas/` "
+                   "(con `modelos/`) junto a `app.py`.")
+    _gem_ok = inicializar_gemini() is not None
+    st.caption('🤖 Explicaciones IA (Gemini): **configurado** — el «¿Por qué este plan?» y el '
+               'ajuste del día se redactan en vivo.' if _gem_ok else
+               '🤖 Explicaciones IA (Gemini): inactivo — se usan plantillas (revisa `gemini_api_key`).')
+    _sx = 'Mujer' if sexo == 'F' else 'Hombre'
+    _sx_efecto = ('y las predicciones de ritmo (modelo XGBoost)' if (_em_estado == 'activo' and infer)
+                  else '(sus predicciones se verán al activar los modelos)')
+    st.caption(f'🚻 Sexo: **{_sx}** — ajusta la carga de entrenamiento (TRIMP de Banister) '
+               f'{_sx_efecto}. La estructura del plan y las zonas no cambian por sexo '
+               '(la FC máxima es independiente del sexo, Tanaka 2001).')
 
 if not per['plan_viable']:
     st.warning(f"⚠ Para un atleta {perfil_tipo} se recomiendan al menos "
@@ -1733,20 +1849,34 @@ bb_hoy = float(st.session_state.get('bb', 78))
 sueno_hoy = float(st.session_state.get('sueno', 7.6))
 stress_hoy = float(st.session_state.get('stress', 28))
 sleep_hoy = float(st.session_state.get('sleep_score', 75))
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric('Body Battery', f'{bb_hoy:.0f}',
-          'bien cargado' if bb_hoy >= 60 else ('baja' if bb_hoy < 35 else 'media'),
-          help=GLOSARIO['Body Battery'])
-m2.metric('Estrés', f'{stress_hoy:.0f}',
-          'bajo' if stress_hoy < 40 else ('alto' if stress_hoy > 70 else 'medio'),
-          delta_color='inverse', help=GLOSARIO['Estrés'])
-m3.metric('HRV', '62 ms', 'estable', help=GLOSARIO['HRV'])
-m4.metric('Sueño (horas)', f"{int(sueno_hoy)}h {int((sueno_hoy % 1) * 60):02d}",
-          'suficiente' if sueno_hoy >= 7 else ('corto' if sueno_hoy < 6 else 'justo'),
-          help=GLOSARIO['Sueño'])
-m5.metric('Sleep Score', f'{sleep_hoy:.0f}',
-          sleep_score_label(sleep_hoy), delta_color='off',
-          help=GLOSARIO['Sleep Score'])
+# Tarjetas HTML (rejilla responsiva: 2 en móvil, varias en escritorio), con
+# estado en color y tooltip de glosario al pasar el cursor.
+_GREEN, _AMBER, _RED, _NEU = '#1d9e75', '#ba7517', '#a32d2d', '#5b6670'
+_bb_s, _bb_c = (('bien cargado', _GREEN) if bb_hoy >= 60
+                else (('baja', _RED) if bb_hoy < 35 else ('media', _AMBER)))
+_st_s, _st_c = (('bajo', _GREEN) if stress_hoy < 40
+                else (('alto', _RED) if stress_hoy > 70 else ('medio', _AMBER)))
+_su_s, _su_c = (('suficiente', _GREEN) if sueno_hoy >= 7
+                else (('corto', _RED) if sueno_hoy < 6 else ('justo', _AMBER)))
+_sueno_txt = f"{int(sueno_hoy)}h {int((sueno_hoy % 1) * 60):02d}"
+_hoy_items = [
+    ('Body Battery', f'{bb_hoy:.0f}', _bb_s, _bb_c, GLOSARIO['Body Battery']),
+    ('Estrés', f'{stress_hoy:.0f}', _st_s, _st_c, GLOSARIO['Estrés']),
+    ('HRV', '62 ms', 'estable', _NEU, GLOSARIO['HRV']),
+    ('Sueño', _sueno_txt, _su_s, _su_c, GLOSARIO['Sueño']),
+    ('Sleep Score', f'{sleep_hoy:.0f}', sleep_score_label(sleep_hoy), _NEU, GLOSARIO['Sleep Score']),
+]
+_cards = ''
+for _lab, _val, _stt, _clr, _hlp in _hoy_items:
+    _h = str(_hlp).replace('"', "'")
+    _cards += (f'<div title="{_h}" style="background:#fff;border:1px solid #e2e8ee;'
+               'border-radius:10px;padding:11px 13px;">'
+               f'<div style="font-size:12px;color:#5b6670;">{_lab}</div>'
+               f'<div style="font-size:22px;font-weight:800;color:#16202b;line-height:1.1;'
+               f'margin-top:2px;">{_val}</div>'
+               f'<div style="font-size:12px;font-weight:700;color:{_clr};margin-top:3px;">{_stt}</div></div>')
+st.markdown('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));'
+            f'gap:10px;margin-bottom:6px;">{_cards}</div>', unsafe_allow_html=True)
 
 # Formulario persistente: queda visible y recuerda lo último introducido
 with st.expander('⟳ Actualizar mi día — ¿cómo amaneciste hoy?',
@@ -1819,7 +1949,11 @@ if st.session_state.get('recalc_done'):
 # ---------------- Forma y rumbo ----------------
 st.subheader(t('h_forma'))
 if not fitness.empty:
-    st.pyplot(grafico_forma(fitness))
+    if PLOTLY_OK:
+        st.plotly_chart(grafico_forma_plotly(fitness), use_container_width=True,
+                        config={'displayModeBar': False})
+    else:
+        st.pyplot(grafico_forma(fitness), use_container_width=True)
     ctl = fitness['CTL'].iloc[-1]
     atl = fitness['ATL'].iloc[-1] if 'ATL' in fitness.columns else float('nan')
     tsb = fitness['TSB'].iloc[-1] if 'TSB' in fitness.columns else ctl - atl
@@ -1841,7 +1975,27 @@ else:
     ctl = 50.0
 
 st.subheader(t('h_rumbo'))
-st.pyplot(grafico_fases(per['fase'], per['semana_actual'], per['semanas_totales']))
+# Barra de macrociclo segmentada (HTML): fase hecha · fase actual · fases futuras.
+_orden_fases = ['Base', 'Construcción', 'Pico', 'Taper', '70.3']
+_fase_nom = NOMBRE_FASE.get(per['fase'], 'Base')
+_idx_fase = _orden_fases.index(_fase_nom) if _fase_nom in _orden_fases else 0
+_segs = ''
+for _i, _nom in enumerate(_orden_fases):
+    if _i < _idx_fase:
+        _bg, _col, _w = '#E6F1FB', '#0c447c', '500'        # ya recorrida
+    elif _i == _idx_fase:
+        _bg, _col, _w = '#1d6fa5', '#ffffff', '700'        # fase actual
+    else:
+        _bg, _col, _w = '#eef3f7', '#5b6670', '500'        # por venir
+    _segs += (f'<div style="flex:1;text-align:center;font-size:12px;font-weight:{_w};'
+              f'color:{_col};background:{_bg};border-radius:6px;padding:9px 2px;">{_nom}</div>')
+# Barra fina de progreso por semanas dentro del plan
+_prog_pct = int(min(max(per['semana_actual'] / max(per['semanas_totales'], 1), 0), 1) * 100)
+st.markdown(
+    f'<div style="display:flex;gap:5px;margin:2px 0 8px;">{_segs}</div>'
+    '<div style="height:7px;background:#eef3f7;border-radius:6px;overflow:hidden;">'
+    f'<div style="height:100%;width:{_prog_pct}%;background:#1d6fa5;border-radius:6px;"></div>'
+    '</div>', unsafe_allow_html=True)
 _sim_txt = (' · 🎛️ modo simulación (semana forzada para la demo)' if semana_sim
             else ' · la semana avanza sola con el calendario desde tu fecha de inicio')
 st.caption(f"📅 Estás en la **semana {per['semana_actual']} de {per['semanas_totales']}** "
@@ -1850,7 +2004,7 @@ st.caption(f"📅 Estás en la **semana {per['semana_actual']} de {per['semanas_
 _desc_fase = next((d for n, _c, _ca, d in FASES_INFO if n == NOMBRE_FASE.get(per['fase'], '')), '')
 st.markdown(
     f"**Fase actual: {NOMBRE_FASE.get(per['fase'], per['fase'])}** — {_desc_fase}.  \n"
-    "Carga por fase (la altura/intensidad del color lo refleja): "
+    "Carga característica de cada fase: "
     "🔵 **Base** volumen alto, intensidad baja · "
     "🟢 **Construcción** sube la intensidad · "
     "🔴 **Pico** carga máxima · "
@@ -1901,7 +2055,11 @@ else:
 
 # ---------------- Zonas ----------------
 st.subheader(t('h_zonas'))
-st.pyplot(grafico_zonas(zonas))
+if PLOTLY_OK:
+    st.plotly_chart(grafico_zonas_plotly(zonas), use_container_width=True,
+                    config={'displayModeBar': False})
+else:
+    st.pyplot(grafico_zonas(zonas), use_container_width=True)
 st.info(f"✓ **Ritmos validados con tu historial** — {zonas['fuente_z2']}.")
 if infer:
     partes = []
@@ -1944,135 +2102,4 @@ EMOJI_DEP = {'Natación': '🔵', 'Ciclismo': '🟢', 'Carrera': '🟠',
 def _render_sesion(s, recalc=None, hoy=False):
     with st.container(border=True):
         emoji = EMOJI_DEP.get(s['deporte'], '⚪')
-        pref = '🎯 **HOY** · ' if hoy else ''
-        try:
-            dur = s['dur_min']
-        except Exception:
-            dur = 0
-        linea = f"{pref}{emoji} **{s['dia']} — {s['deporte']}** · {s['tipo']}"
-        if dur:
-            linea += f" · {s['km']} km · {dur} min"
-        st.markdown(linea)
-        st.caption(s['detalle'])
-        if recalc and str(s['dia']).startswith(recalc['dia']) and recalc['decision'] != 'MANTENER':
-            (st.error if recalc['decision'] == 'DESCANSO HOY' else st.warning)(
-                f"🔁 Ajuste de hoy ({recalc['decision']}): {recalc['detalle']}")
-
-
-def _sesion_de_hoy(sesiones):
-    dia = DIAS_ES[pd.Timestamp.today().dayofweek]
-    for s in sesiones:
-        if str(s['dia']).startswith(dia):
-            return s
-    return None
-
-
-st.subheader(t('h_semana'))
-if recalc_hoy and recalc_hoy['decision'] != 'MANTENER':
-    aviso = st.error if recalc_hoy['decision'] == 'DESCANSO HOY' else st.warning
-    aviso(f"🔁 **Ajuste de hoy ({recalc_hoy['dia']} · {recalc_hoy['decision']})** — "
-          f"{recalc_hoy['detalle']}")
-ses_df = datos['sesiones_plan']
-# El plan sigue a la FUENTE: con Strava se genera en vivo (progresivo, según tus
-# actividades reales); en Local con BD se muestra el plan persistido del notebook.
-if (not usando_strava) and hay_datos and not ses_df.empty and atleta in ses_df['athlete'].values:
-    sem = ses_df[ses_df['athlete'] == atleta]
-    plan_tipo = sem['plan_tipo'].iloc[0]
-    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
-                f'{plan_tipo} · fase {per["fase"].capitalize()}</span>',
-                unsafe_allow_html=True)
-    sesiones_sem = [row for _, row in sem.iterrows()]
-    _hoy = _sesion_de_hoy(sesiones_sem)
-    if _hoy is not None:
-        st.markdown('**🎯 Tu entrenamiento de hoy**')
-        _render_sesion(_hoy, recalc_hoy, hoy=True)
-    # Resumen de la semana ARRIBA, antes del detalle día a día
-    pl = datos['planes_semanales']
-    fila = pl[pl['athlete'] == atleta].iloc[0] if not pl.empty else None
-    if fila is not None:
-        st.caption('Resumen de la semana')
-        c = st.columns(6)
-        for col, (lab, val) in zip(c, [
-                ('Sesiones', f"{fila.get('sesiones_semana', '—')}"),
-                ('Volumen', min2t(fila.get('natacion_min', 0) + fila.get('ciclismo_min', 0)
-                                  + fila.get('carrera_min', 0)) + ' h'),
-                ('Natación', f"{fila.get('natacion_km', '—')} km"),
-                ('Ciclismo', f"{fila.get('ciclismo_km', '—')} km"),
-                ('Carrera', f"{fila.get('carrera_km', '—')} km"),
-                ('TSB', f"{fila.get('TSB', float('nan')):.1f}")]):
-            col.metric(lab, val)
-    st.caption('Tu semana completa, día a día:')
-    for s in sesiones_sem:
-        _render_sesion(s, recalc_hoy)
-else:
-    # Modo demo / sin notebook: el motor genera una semana ADAPTATIVA y progresiva
-    plan, meta = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo)
-    origen = 'datos Strava' if usando_strava else 'modo demo'
-    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
-                f'Plan adaptativo ({origen}) · fase {per["fase"].capitalize()} · '
-                f'semana {meta["sem_idx"]} de {meta["sem_tot"]}</span>',
-                unsafe_allow_html=True)
-    base_txt = (f"tu frecuencia actual (~{meta['freq_act']:.0f} sesiones/sem) y "
-                if meta['freq_act'] else "tu perfil y ")
-    st.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
-               f"{base_txt}el avance del plan (semana {meta['sem_idx']}/{meta['sem_tot']}). "
-               "La frecuencia y el volumen suben de forma gradual hacia la carrera para evitar sobrecarga.")
-    if meta.get('descarga'):
-        st.info('🌙 **Semana de descarga (recuperación).** Cada 4 semanas (patrón 3:1) se '
-                'reduce el volumen ~40 % y se baja la intensidad para asimilar la carga '
-                'acumulada y supercompensar. No es perder forma: es cuando el cuerpo se adapta.')
-    if meta['nat_intro']:
-        st.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
-                   'por ser la disciplina más técnica del 70.3.')
-    _hoy = _sesion_de_hoy(plan)
-    if _hoy is not None:
-        st.markdown('**🎯 Tu entrenamiento de hoy**')
-        _render_sesion(_hoy, recalc_hoy, hoy=True)
-    # Resumen de la semana ARRIBA, antes del detalle día a día
-    ses_n = sum(1 for s in plan if s['deporte'] not in ('Descanso', 'Movilidad'))
-    vol = sum(s['dur_min'] for s in plan)
-    km_nat = sum(s['km'] for s in plan if s['deporte'] == 'Natación')
-    km_cic = sum(s['km'] for s in plan if s['deporte'] == 'Ciclismo')
-    km_car = sum(s['km'] for s in plan if s['deporte'] in ('Carrera', 'Competencia'))
-    c = st.columns(5)
-    for col, (lab, val) in zip(c, [('Sesiones', f"{ses_n}"),
-                                   ('Volumen', f"{min2t(vol)} h"),
-                                   ('Natación', f"{km_nat:.1f} km"),
-                                   ('Ciclismo', f"{km_cic:.0f} km"),
-                                   ('Carrera', f"{km_car:.1f} km")]):
-        col.metric(lab, val)
-    st.caption('Tu semana completa, día a día:')
-    for s in plan:
-        _render_sesion(s, recalc_hoy)
-
-# ---------------- ¿Por qué este plan? ----------------
-st.subheader(t('h_porque'))
-explicacion_plan = generar_explicacion_plan(atleta, perfil_tipo, per['fase'],
-                                            per['semanas_restantes'], ctl)
-if explicacion_plan:
-    st.info(f"💡 {explicacion_plan}")
-else:
-    st.info(f"💡 Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
-            f"con {per['semanas_restantes']} semanas para la competencia. "
-            f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas.")
-
-# ---------------- Plan de competencia ----------------
-if per['fase'] in ('COMPETENCIA', 'TAPERING'):
-    st.subheader('🏁 Plan de carrera, km a km')
-    st.caption('La FC manda sobre el ritmo. Bici progresiva hasta recuperar pulsaciones tras la natación.')
-    seg, resumen = plan_competencia(zonas, objetivo)
-    disciplina = None
-    for d_, tramo, txt in seg:
-        if d_ != disciplina:
-            disciplina = d_
-            st.markdown(f'**{disciplina}**')
-        st.markdown(f'- `{tramo}` — {txt}')
-    st.success(f'⏱ Tiempo estimado: {resumen}')
-
-# ---------------- Glosario ----------------
-with st.expander('ⓘ Para entender tu plan (glosario)'):
-    for k, v in GLOSARIO.items():
-        st.markdown(f'**{k}** — {v}')
-
-st.caption('Demostrador del TFM «Sistema de Análisis Fisiológico y Planificación '
-           'Adaptativa — Triatlón 70.3». El LLM/plantillas explican; los modelos deciden.')
+        pref = '🎯 **HOY** · '
