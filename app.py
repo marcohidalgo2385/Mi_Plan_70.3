@@ -2102,4 +2102,135 @@ EMOJI_DEP = {'Natación': '🔵', 'Ciclismo': '🟢', 'Carrera': '🟠',
 def _render_sesion(s, recalc=None, hoy=False):
     with st.container(border=True):
         emoji = EMOJI_DEP.get(s['deporte'], '⚪')
-        pref = '🎯 **HOY** · '
+        pref = '🎯 **HOY** · ' if hoy else ''
+        try:
+            dur = s['dur_min']
+        except Exception:
+            dur = 0
+        linea = f"{pref}{emoji} **{s['dia']} — {s['deporte']}** · {s['tipo']}"
+        if dur:
+            linea += f" · {s['km']} km · {dur} min"
+        st.markdown(linea)
+        st.caption(s['detalle'])
+        if recalc and str(s['dia']).startswith(recalc['dia']) and recalc['decision'] != 'MANTENER':
+            (st.error if recalc['decision'] == 'DESCANSO HOY' else st.warning)(
+                f"🔁 Ajuste de hoy ({recalc['decision']}): {recalc['detalle']}")
+
+
+def _sesion_de_hoy(sesiones):
+    dia = DIAS_ES[pd.Timestamp.today().dayofweek]
+    for s in sesiones:
+        if str(s['dia']).startswith(dia):
+            return s
+    return None
+
+
+st.subheader(t('h_semana'))
+if recalc_hoy and recalc_hoy['decision'] != 'MANTENER':
+    aviso = st.error if recalc_hoy['decision'] == 'DESCANSO HOY' else st.warning
+    aviso(f"🔁 **Ajuste de hoy ({recalc_hoy['dia']} · {recalc_hoy['decision']})** — "
+          f"{recalc_hoy['detalle']}")
+ses_df = datos['sesiones_plan']
+# El plan sigue a la FUENTE: con Strava se genera en vivo (progresivo, según tus
+# actividades reales); en Local con BD se muestra el plan persistido del notebook.
+if (not usando_strava) and hay_datos and not ses_df.empty and atleta in ses_df['athlete'].values:
+    sem = ses_df[ses_df['athlete'] == atleta]
+    plan_tipo = sem['plan_tipo'].iloc[0]
+    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+                f'{plan_tipo} · fase {per["fase"].capitalize()}</span>',
+                unsafe_allow_html=True)
+    sesiones_sem = [row for _, row in sem.iterrows()]
+    _hoy = _sesion_de_hoy(sesiones_sem)
+    if _hoy is not None:
+        st.markdown('**🎯 Tu entrenamiento de hoy**')
+        _render_sesion(_hoy, recalc_hoy, hoy=True)
+    # Resumen de la semana ARRIBA, antes del detalle día a día
+    pl = datos['planes_semanales']
+    fila = pl[pl['athlete'] == atleta].iloc[0] if not pl.empty else None
+    if fila is not None:
+        st.caption('Resumen de la semana')
+        c = st.columns(6)
+        for col, (lab, val) in zip(c, [
+                ('Sesiones', f"{fila.get('sesiones_semana', '—')}"),
+                ('Volumen', min2t(fila.get('natacion_min', 0) + fila.get('ciclismo_min', 0)
+                                  + fila.get('carrera_min', 0)) + ' h'),
+                ('Natación', f"{fila.get('natacion_km', '—')} km"),
+                ('Ciclismo', f"{fila.get('ciclismo_km', '—')} km"),
+                ('Carrera', f"{fila.get('carrera_km', '—')} km"),
+                ('TSB', f"{fila.get('TSB', float('nan')):.1f}")]):
+            col.metric(lab, val)
+    st.caption('Tu semana completa, día a día:')
+    for s in sesiones_sem:
+        _render_sesion(s, recalc_hoy)
+else:
+    # Modo demo / sin notebook: el motor genera una semana ADAPTATIVA y progresiva
+    plan, meta = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo)
+    origen = 'datos Strava' if usando_strava else 'modo demo'
+    st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+                f'Plan adaptativo ({origen}) · fase {per["fase"].capitalize()} · '
+                f'semana {meta["sem_idx"]} de {meta["sem_tot"]}</span>',
+                unsafe_allow_html=True)
+    base_txt = (f"tu frecuencia actual (~{meta['freq_act']:.0f} sesiones/sem) y "
+                if meta['freq_act'] else "tu perfil y ")
+    st.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
+               f"{base_txt}el avance del plan (semana {meta['sem_idx']}/{meta['sem_tot']}). "
+               "La frecuencia y el volumen suben de forma gradual hacia la carrera para evitar sobrecarga.")
+    if meta.get('descarga'):
+        st.info('🌙 **Semana de descarga (recuperación).** Cada 4 semanas (patrón 3:1) se '
+                'reduce el volumen ~40 % y se baja la intensidad para asimilar la carga '
+                'acumulada y supercompensar. No es perder forma: es cuando el cuerpo se adapta.')
+    if meta['nat_intro']:
+        st.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
+                   'por ser la disciplina más técnica del 70.3.')
+    _hoy = _sesion_de_hoy(plan)
+    if _hoy is not None:
+        st.markdown('**🎯 Tu entrenamiento de hoy**')
+        _render_sesion(_hoy, recalc_hoy, hoy=True)
+    # Resumen de la semana ARRIBA, antes del detalle día a día
+    ses_n = sum(1 for s in plan if s['deporte'] not in ('Descanso', 'Movilidad'))
+    vol = sum(s['dur_min'] for s in plan)
+    km_nat = sum(s['km'] for s in plan if s['deporte'] == 'Natación')
+    km_cic = sum(s['km'] for s in plan if s['deporte'] == 'Ciclismo')
+    km_car = sum(s['km'] for s in plan if s['deporte'] in ('Carrera', 'Competencia'))
+    c = st.columns(5)
+    for col, (lab, val) in zip(c, [('Sesiones', f"{ses_n}"),
+                                   ('Volumen', f"{min2t(vol)} h"),
+                                   ('Natación', f"{km_nat:.1f} km"),
+                                   ('Ciclismo', f"{km_cic:.0f} km"),
+                                   ('Carrera', f"{km_car:.1f} km")]):
+        col.metric(lab, val)
+    st.caption('Tu semana completa, día a día:')
+    for s in plan:
+        _render_sesion(s, recalc_hoy)
+
+# ---------------- ¿Por qué este plan? ----------------
+st.subheader(t('h_porque'))
+explicacion_plan = generar_explicacion_plan(atleta, perfil_tipo, per['fase'],
+                                            per['semanas_restantes'], ctl)
+if explicacion_plan:
+    st.info(f"💡 {explicacion_plan}")
+else:
+    st.info(f"💡 Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
+            f"con {per['semanas_restantes']} semanas para la competencia. "
+            f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas.")
+
+# ---------------- Plan de competencia ----------------
+if per['fase'] in ('COMPETENCIA', 'TAPERING'):
+    st.subheader('🏁 Plan de carrera, km a km')
+    st.caption('La FC manda sobre el ritmo. Bici progresiva hasta recuperar pulsaciones tras la natación.')
+    seg, resumen = plan_competencia(zonas, objetivo)
+    disciplina = None
+    for d_, tramo, txt in seg:
+        if d_ != disciplina:
+            disciplina = d_
+            st.markdown(f'**{disciplina}**')
+        st.markdown(f'- `{tramo}` — {txt}')
+    st.success(f'⏱ Tiempo estimado: {resumen}')
+
+# ---------------- Glosario ----------------
+with st.expander('ⓘ Para entender tu plan (glosario)'):
+    for k, v in GLOSARIO.items():
+        st.markdown(f'**{k}** — {v}')
+
+st.caption('Demostrador del TFM «Sistema de Análisis Fisiológico y Planificación '
+           'Adaptativa — Triatlón 70.3». El LLM/plantillas explican; los modelos deciden.')
