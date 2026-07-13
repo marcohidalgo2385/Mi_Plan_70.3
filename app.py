@@ -144,9 +144,13 @@ GLOSARIO = {
     'Sueño': "El sueño profundo es donde ocurre la reparación muscular y hormonal. Menos de ~1 h por noche de forma repetida frena la adaptación.",
     'Sleep Score': "Puntuación 0-100 que resume la CALIDAD del sueño (no las horas): combina sueño profundo y REM, despertares, duración y estabilidad de la FC. Excelente 90+, Buena 80-89, Regular 60-79, Mala <60. Puedes dormir muchas horas con un score bajo y amanecer cansado; por eso ajusta el entrenamiento aunque las horas parezcan suficientes.",
     'FC': "Frecuencia cardiaca, en pulsaciones por minuto (ppm). Es el cuentarrevoluciones del entrenamiento.",
-    'CTL / ATL / TSB': "CTL = Fitness (forma acumulada de ~6 semanas, media exponencial de la carga). ATL = Fatiga (carga de los últimos ~7 días). TSB = Frescura = CTL − ATL. La referencia es 0: TSB positivo = descansado (fresco para competir); TSB negativo = cargado. Bandas orientativas: por encima de +25 demasiado fresco (riesgo de desentrenar); de +5 a +25 a punto para competir; de −10 a +5 en equilibrio/mantenimiento; de −30 a −10 carga productiva (estás construyendo forma, fatiga normal y buscada); por debajo de −30 sobrecarga (riesgo, toca aliviar).",
+    'CTL / ATL / TSB': "CTL = Fitness (forma acumulada de ~6 semanas, media exponencial de la carga). ATL = Fatiga (carga de los últimos ~7 días). TSB = Frescura = CTL − ATL. La referencia es 0: TSB positivo = descansado (fresco para competir); TSB negativo = cargado. Bandas orientativas: por encima de +25 demasiado fresco (riesgo de desentrenar); de +5 a +25 a punto para competir; de −10 a +5 en equilibrio/mantenimiento; de −30 a −10 carga productiva (estás construyendo forma, fatiga normal y buscada); por debajo de −30 sobrecarga (riesgo, toca aliviar). Importante: un TSB alto solo significa «a punto para competir» cuando llega tras un taper desde una CTL alta; si la CTL viene cayendo (parón, lesión o accidente), la fatiga baja más rápido que la forma y ese mismo TSB positivo es desentrenamiento («óxido»), no pico de forma. Por eso la app compara tu CTL con la de hace 4 semanas y con los días que llevas sin entrenar antes de decirte que estás a punto.",
     'Zonas Z1-Z5': "Intensidades por FC: Z1 muy suave (recuperar), Z2 aeróbico (la base, puedes hablar), Z3 medio (te cuesta hablar), Z4 umbral (frases cortas), Z5 máximo.",
-    'D+': "Desnivel positivo acumulado: metros totales de subida de la ruta. Más D+ = más carga muscular y cardiaca al mismo ritmo.",
+    'D+': "Desnivel positivo acumulado: metros totales de subida de la ruta. Más D+ = más carga muscular y cardiaca al mismo ritmo. El plan te pide acumular cierto D+ en el fondo de bici (subir desarrolla fuerza y potencia) y algo en la tirada larga.",
+    'fuerza / musculación': "Trabajo de gimnasio (sentadilla, peso muerto, zancadas, gemelos y core). 2 veces por semana mejora la ECONOMÍA (gastas menos energía al mismo ritmo), sube el umbral y previene lesiones. No te pone 'grande': te hace más eficiente y resistente. Se reduce cerca de la carrera para llegar fresco.",
+    'core': "Músculos del tronco (abdomen, lumbares, glúteos). Un core fuerte estabiliza la postura al nadar, pedalear y correr ya cansado, y protege la espalda. Es lo que más se trabaja junto con las piernas.",
+    'excéntrico / bajadas': "Cuando el músculo trabaja 'frenando' (p. ej. el cuádriceps al bajar una cuesta corriendo). Entrenarlo con BAJADAS controladas reduce las agujetas y evita que se te caiga el ritmo en la carrera del 70.3.",
+    'efecto de sesión repetida': "Tras una sesión de bajadas, la siguiente daña mucho menos el músculo. Por eso se introducen descensos poco a poco en las tiradas largas: te 'vacunan' contra las agujetas del día de la carrera.",
     'brick': "Bici seguida inmediatamente de carrera. Entrena la transición T2: los primeros minutos con 'piernas de cemento' que sentirás el día del 70.3.",
     'series': "Repeticiones de un esfuerzo con recuperación entre ellas (ej. 6x800 m). Permiten acumular minutos a intensidades que de seguido no aguantarías.",
     'FTP': "Potencia máxima sostenible ~1 h en bici (vatios). Con potenciómetro, las series se hacen al 90-100% del FTP; sin él, por FC y velocidad.",
@@ -286,11 +290,24 @@ def generar_explicacion_plan(atleta, perfil_tipo, fase, semanas_restantes, ctl_a
         return None
 
     try:
-        prompt = f"""Eres un entrenador de triatlón. Escribe una justificación breve (3-4 frases) de por qué
+        _fuerza = {
+            'BASE': '2 sesiones de fuerza por semana (resistencia muscular de piernas y core)',
+            'CONSTRUCCION': '2 sesiones de fuerza por semana (fuerza máxima y potencia de piernas y core)',
+            'PICO': '1 sesión de fuerza de mantenimiento por semana',
+            'TAPERING': '1 activación de fuerza ligera por semana',
+            'COMPETENCIA': 'sin fuerza esta semana (solo competir y descansar)',
+        }.get(fase, '2 sesiones de fuerza por semana')
+        prompt = f"""Eres un entrenador de triatlón. Escribe una justificación breve (4-5 frases) de por qué
         el plan actual es ideal para {atleta}, un triatleta {perfil_tipo} que está en fase {fase}
         con {semanas_restantes} semanas para la carrera y forma actual (CTL) de {ctl_actual:.0f}.
 
-        Sé específico y pedagógico: explica qué mejorará y por qué el ritmo es el adecuado para esta fase."""
+        El plan, además de nadar/pedalear/correr, incluye {_fuerza}, y prescribe acumular DESNIVEL:
+        subidas en el fondo de bici (para ganar fuerza y potencia) y bajadas controladas en la tirada
+        larga (para acostumbrar el músculo y evitar agujetas el día de la carrera).
+
+        Sé específico y pedagógico, con PALABRAS SENCILLAS (el atleta no es experto). Explica qué mejorará,
+        por qué el ritmo es el adecuado para esta fase, y en una frase por qué la fuerza y el desnivel
+        le ayudan a completar el 70.3."""
 
         response = model.generate_content(prompt)
         return response.text if response else None
@@ -1202,6 +1219,10 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
         mie = {'dia': 'Miércoles', 'deporte': 'Ciclismo', 'tipo': 'rodaje Z2',
                'dur_min': mie_bike, 'km': kb(mie_bike, v_b2),
                'detalle': f'Rodaje a {v_b2:.0f} km/h en Z2, cadencia 85-95 rpm.'}
+    if intens:
+        mie['detalle'] += (' Si puedes, haz las series en una cuesta de 3-5 min al mismo Z4: '
+                           'el trabajo en subida eleva la velocidad a VO2máx y la fuerza '
+                           'específica de pedaleo.')
 
     # --- Sábado: FONDO de bici + BRICK de carrera ---
     # El brick NO se limita a Construcción/Pico: se introduce ya en Base tardío
@@ -1210,6 +1231,15 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     # del brick crece de ~15-20 min (Base) a ~45-50 min (Pico) — rango 30-60 min
     # recomendado para 70.3; 20 min en Pico no prepara una carrera de >2 h.
     bike_long = dur(220)                       # pico ≈ 3,5 h → cerca de los 90 km
+    # Desnivel positivo (D+) objetivo del fondo. El trabajo en cuesta desarrolla
+    # fuerza específica, potencia y velocidad a VO2máx (especificidad de un 70.3
+    # con rampas). Escala 6→14 m/km con la fase y se reduce en descarga.
+    dplus_bike = int(round(kb(bike_long, v_b2) * (6 + 8 * min(prog / 0.85, 1.0)) / 50.0) * 50)
+    if es_descarga:
+        dplus_bike = int(round(dplus_bike * 0.5 / 50.0) * 50)
+    elev_bike = (f' Busca acumular ~{dplus_bike} m de desnivel positivo (D+): rodar en '
+                 f'subida construye fuerza específica y potencia para afrontar el perfil '
+                 f'del 70.3.')
     hay_brick = (fase in ('BASE', 'CONSTRUCCION', 'PICO')) and prog >= 0.25
     if hay_brick:
         brick_peak = 55 if intens else 30      # carrera del brick objetivo (min)
@@ -1232,6 +1262,7 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
                'detalle': (f'Fondo de {kb(bike_long, v_b2):.0f} km a {v_b2:.0f} km/h en Z2 '
                            f'({hrz2}). Construye la resistencia aeróbica de base hacia los 90 km; '
                            f'practica comida e hidratación de carrera.')}
+    sab['detalle'] += elev_bike
 
     # --- Domingo: TIRADA LARGA orientada a distancia (tiempo en pie) ---
     # Construye hacia ~18 km en pico (recomendación 70.3: 16-20 km, no media maratón
@@ -1243,12 +1274,22 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     larga_min = int(round(min(max(larga_km / max(v_run, 1) * 60, 40), 140) / 5) * 5)
     larga_km = round(larga_min / 60 * v_run, 1)
     finish_km = max(round(min(larga_km * 0.3, 6.0), 1), 1.0)
+    # D+ de la tirada larga (4→10 m/km). Incluir bajadas controladas entrena la
+    # musculatura excéntrica (cuádriceps) y, por el "efecto de sesión repetida"
+    # (repeated bout effect), atenúa el daño muscular y protege la economía de
+    # carrera el día del 70.3 — clave sobre todo para el perfil rodador/ciclista.
+    dplus_run = int(round(larga_km * (4 + 6 * min(prog / 0.85, 1.0)) / 10.0) * 10)
+    if es_descarga:
+        dplus_run = int(round(dplus_run * 0.5 / 10.0) * 10)
     dom = {'dia': 'Domingo', 'deporte': 'Carrera', 'tipo': 'tirada larga progresiva',
            'dur_min': larga_min, 'km': larga_km,
            'detalle': (f'Tirada larga de {larga_km:.1f} km ({larga_min} min): arranca cómodo '
                        f'a {rz2} en Z2 ({hrz2}) y corre los últimos ~{finish_km:.0f} km a '
                        f'{robj} (ritmo objetivo del 70.3). Construye resistencia y enseña a '
-                       f'tu cuerpo a correr a ritmo de carrera ya cansado, hacia los 21,1 km.')}
+                       f'tu cuerpo a correr a ritmo de carrera ya cansado, hacia los 21,1 km.'
+                       f' Incluye ~{dplus_run} m de D+ con tramos de bajada controlada: correr '
+                       f'en descenso entrena la musculatura excéntrica y, por el efecto de '
+                       f'sesión repetida, reduce el daño muscular y las agujetas en carrera.')}
 
     catalogo = [
         ('Sábado', sab),
@@ -1271,6 +1312,55 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     ]
     por_dia = {dia: s for dia, s in catalogo[:n_ses]}
 
+    # --- FUERZA / MUSCULACIÓN (piernas + core) ---------------------------------
+    # La evidencia recomienda 2-3 sesiones/semana de fuerza para triatletas (mejora
+    # economía, umbral y prevención de lesiones). Se periodiza: resistencia muscular
+    # en Base, fuerza máxima + potencia en Construcción, mantenimiento en Pico y solo
+    # activación en Taper. Se ubican en días sueltos (sin desplazar nado/bici/carrera)
+    # y el viernes se limita a core/movilidad para no llegar con piernas cargadas al
+    # brick del sábado.
+    n_fuerza = {'BASE': 2, 'CONSTRUCCION': 2, 'PICO': 1,
+                'TAPERING': 1, 'COMPETENCIA': 0}.get(fase, 1)
+    if es_descarga:
+        n_fuerza = min(n_fuerza, 1)
+    fuerza_cfg = {
+        'BASE': ('fuerza — resistencia muscular', 40,
+                 'Circuito de piernas y core (2-3 vueltas de 12-15 rep): sentadilla, peso '
+                 'muerto rumano, zancadas, gemelos y core anti-rotación (plancha, pallof). '
+                 'Construye base estructural y previene lesiones.'),
+        'CONSTRUCCION': ('fuerza — máxima + potencia', 40,
+                 'Fuerza pesada de piernas (3-5 series de 4-6 rep a alta carga): sentadilla, '
+                 'peso muerto, prensa, + core. Cierra con 2-3 saltos explosivos (pliometría '
+                 'ligera). 2 veces/semana es lo que mejora economía y umbral.'),
+        'PICO': ('fuerza — mantenimiento/potencia', 30,
+                 'Mantenimiento: poco volumen y alta calidad (2 series de 3-5 rep explosivas) '
+                 '+ core. Conserva la fuerza ganada sin restar frescura a las sesiones clave.'),
+        'TAPERING': ('activación neuromuscular', 20,
+                 'Activación corta y ligera, sin fatiga: movilidad, core y 2-3 saltos o '
+                 'sentadillas explosivas para mantener el patrón neuromuscular fresco.'),
+    }.get(fase)
+    if fuerza_cfg and n_fuerza:
+        f_tipo, f_dur, f_det = fuerza_cfg
+        añadidas = 0
+        for d in ('Lunes', 'Miércoles', 'Martes', 'Viernes'):
+            if añadidas >= n_fuerza:
+                break
+            if d in por_dia:
+                continue
+            if d == 'Viernes':   # víspera del brick: solo core/movilidad
+                s = {'dia': d, 'deporte': 'Fuerza', 'tipo': 'core + movilidad',
+                     'dur_min': min(f_dur, 25), 'km': 0,
+                     'detalle': ('Core y movilidad (sin piernas pesadas: mañana toca el brick): '
+                                 'plancha, pallof, puente de glúteo y movilidad de cadera/tobillo.')}
+            else:
+                s = {'dia': d, 'deporte': 'Fuerza', 'tipo': f_tipo,
+                     'dur_min': f_dur, 'km': 0, 'detalle': f_det}
+            por_dia[d] = s
+            añadidas += 1
+        n_fuerza = añadidas
+    else:
+        n_fuerza = 0
+
     if fase == 'COMPETENCIA':
         por_dia['Domingo'] = {'dia': 'Domingo', 'deporte': 'Competencia', 'tipo': '70.3',
                               'km': 0, 'dur_min': 0,
@@ -1288,7 +1378,8 @@ def generar_plan_semanal(perfil_tipo, per, zonas, acts=None, sexo='M'):
     meta = {'n_ses': n_ses, 'sem_idx': sem_idx, 'sem_tot': sem_tot,
             'freq_act': freq_act, 'disciplinas': disciplinas, 'nat_intro': nat_intro,
             'tiene_brick': bool(hay_brick and brick_run),
-            'tiene_mini_brick': bool(intens and mini_brick), 'descarga': es_descarga}
+            'tiene_mini_brick': bool(intens and mini_brick), 'descarga': es_descarga,
+            'n_fuerza': n_fuerza, 'dplus_bike': dplus_bike, 'dplus_run': dplus_run}
     return plan, meta
 
 
@@ -1957,7 +2048,57 @@ if not fitness.empty:
     ctl = fitness['CTL'].iloc[-1]
     atl = fitness['ATL'].iloc[-1] if 'ATL' in fitness.columns else float('nan')
     tsb = fitness['TSB'].iloc[-1] if 'TSB' in fitness.columns else ctl - atl
-    if tsb > 25:
+
+    # --- Validación anti-desentrenamiento -------------------------------------
+    # El TSB es una medida RELATIVA (forma − fatiga), NO un nivel absoluto de forma.
+    # Tras un parón (lesión, accidente, viaje) la fatiga (ATL, ventana 7 días) cae
+    # mucho más rápido que la forma (CTL, ventana 42 días): al principio el TSB se
+    # dispara (>+25) y el aviso "demasiado fresco" es correcto, pero unas semanas
+    # después ATL y CTL convergen a un nivel BAJO y el TSB vuelve a la franja +5..+25.
+    # Sin control, ese TSB "sano" se etiquetaría como «a punto para competir» cuando
+    # el atleta en realidad ha PERDIDO forma. Aquí comparamos la CTL de hoy con la de
+    # hace ~4 semanas para distinguir la frescura de un taper (buena) de la frescura
+    # por desentrenamiento (falsa señal de estar a punto para competir).
+    ctl_ref = ctl            # CTL de referencia (hace ~28 días)
+    if 'date' in fitness.columns and len(fitness) > 1:
+        _fd = fitness.dropna(subset=['CTL']).copy()
+        _fd['date'] = pd.to_datetime(_fd['date'], errors='coerce')
+        _fd = _fd.dropna(subset=['date']).sort_values('date')
+        if len(_fd) > 1:
+            _ref_date = _fd['date'].iloc[-1] - pd.Timedelta(days=28)
+            _prev = _fd[_fd['date'] <= _ref_date]
+            ctl_ref = float(_prev['CTL'].iloc[-1]) if not _prev.empty else float(_fd['CTL'].iloc[0])
+    perdida_pct = ((ctl_ref - ctl) / ctl_ref * 100.0) if ctl_ref > 1e-6 else 0.0
+    # Días reales sin entrenar (desde la última actividad registrada). Señal directa
+    # para escalar el aviso ante inactividad prolongada (parón, lesión, accidente) y
+    # para reforzar la detección de óxido en parones muy largos (ver más abajo).
+    dias_inactivo = None
+    if acts is not None and not getattr(acts, 'empty', True) and 'date' in acts.columns:
+        _ad = pd.to_datetime(acts['date'], utc=True, errors='coerce').dt.tz_localize(None).dropna()
+        if not _ad.empty:
+            dias_inactivo = int((pd.Timestamp.today().normalize() - _ad.max().normalize()).days)
+    # Desentrenando = la frescura viene de PERDER forma, no de un taper controlado.
+    # La clave para separar taper (bueno) de desentrenamiento (falsa señal de estar
+    # a punto) es la MAGNITUD de la caída de CTL en las últimas 4 semanas, medida
+    # respecto al propio atleta (no a un objetivo fijo, para no penalizar a atletas de
+    # menor nivel). Validado por simulación con el mismo motor CTL/ATL de la app:
+    #   · un taper real recorta volumen ~2-3 semanas → la CTL baja como mucho ~10-22 %,
+    #   · un parón (lesión/accidente) hunde la CTL ~28 % (1ª sem) → ~50-75 % (2ª-4ª sem).
+    # Umbral ≥30 % de caída con TSB>0: NO marca ningún taper legítimo y sí detecta el
+    # parón desde la 2ª semana. La 1ª semana ya la cubre la banda «demasiado fresco».
+    # Además, en parones muy largos el TSB tiende a 0 (CTL y ATL ~0) y podría colarse a
+    # un neutro «en equilibrio» absurdo: por eso ≥14 días sin entrenar fuerza también óxido.
+    desentrenando = ((tsb > 0) and (perdida_pct >= 30.0)) \
+        or (dias_inactivo is not None and dias_inactivo >= 14)
+
+    if desentrenando:
+        banda = (f'frescura por PÉRDIDA DE FORMA, no por taper — tu fatiga ha bajado porque '
+                 f'llevas semanas con poca o ninguna carga y tu fitness (CTL) ha caído de '
+                 f'{ctl_ref:.0f} a {ctl:.0f} (−{perdida_pct:.0f} %). Un TSB positivo aquí NO '
+                 f'significa estar a punto: es «óxido», no pico de forma. Reconstruye de forma '
+                 f'progresiva antes de exigirte o competir')
+        col_fn = st.warning
+    elif tsb > 25:
         banda, col_fn = 'demasiado fresco — riesgo de desentrenar si se mantiene', st.warning
     elif tsb > 5:
         banda, col_fn = 'fresco, a punto para competir (zona de taper)', st.success
@@ -1969,7 +2110,43 @@ if not fitness.empty:
         banda, col_fn = 'sobrecarga — fatiga alta, conviene aliviar para no arriesgar lesión', st.error
     col_fn(f"**Tu frescura hoy: TSB = {tsb:+.1f}** (referencia 0). {banda}.\n\n"
            f"CTL/Fitness {ctl:.0f} · ATL/Fatiga {atl:.0f}. El TSB es la resta (forma − fatiga): "
-           f"por encima de 0 estás descansado, por debajo estás cargado.")
+           f"por encima de 0 estás descansado, por debajo estás cargado. "
+           + ("**Ojo:** un TSB alto solo indica forma óptima cuando llega tras un taper desde una "
+              "CTL alta y estable; si la CTL viene cayendo, la frescura es por desentrenamiento."
+              if desentrenando else
+              "Recuerda: la frescura solo equivale a estar «a punto» si tu CTL está alta; "
+              "con CTL baja, un TSB positivo es descanso, no forma de competición."))
+
+    # --- Aviso escalonado por inactividad prolongada --------------------------
+    # A partir de una semana sin entrenar, la app avisa con un tono creciente. Se
+    # apoya en los días REALES sin actividad (no solo en la CTL, que al aplanarse cerca
+    # de 0 deja de distinguir 3 semanas de 6 meses). Objetivo doble: no dar falsa
+    # sensación de forma y guiar un retorno seguro (evitar la lesión típica de retomar
+    # con los volúmenes de antes). Umbrales alineados con la literatura de
+    # desentrenamiento (pérdida marcada a partir de ~2-4 semanas; casi total >8 semanas)
+    # y de retorno progresivo (regla del ~10 %/semana).
+    if dias_inactivo is not None and dias_inactivo >= 7:
+        _sem_inact = dias_inactivo / 7.0
+        if dias_inactivo >= 56:            # ≥ 8 semanas
+            st.error(
+                f"⛔ **Llevas {dias_inactivo} días (~{_sem_inact:.0f} semanas) sin entrenar.** "
+                "A esta altura la pérdida de forma es casi total: prácticamente partes de cero. "
+                "El plan debería **reiniciarse desde la fase Base**, retomando con una progresión "
+                "suave (regla del ~10 %/semana) — no reanudes con los volúmenes de antes. "
+                "Si el parón fue por **lesión o accidente, valida el alta médica antes de volver**.")
+        elif dias_inactivo >= 28:          # 4-8 semanas
+            st.warning(
+                f"⚠️ **Llevas {dias_inactivo} días (~{_sem_inact:.0f} semanas) sin entrenar.** "
+                "Pérdida de forma significativa. Al volver, **reconstruye desde Base** a un "
+                "~50-60 % de tu volumen previo y sube de forma gradual antes de meter intensidad.")
+        elif dias_inactivo >= 14:          # 2-4 semanas
+            st.warning(
+                f"⚠️ **Llevas {dias_inactivo} días sin entrenar.** El desentrenamiento ya está en "
+                "curso: retoma pronto y de forma progresiva para recuperar la base sin arriesgar lesión.")
+        else:                              # 7-14 días
+            st.info(
+                f"ℹ️ **Llevas {dias_inactivo} días sin entrenar.** Aún conservas la forma, pero es "
+                "frescura por inactividad: vuelve a la rutina esta semana para no empezar a perder base.")
 else:
     st.caption('Sin datos de fitness: ejecuta el notebook para generar salidas/.')
     ctl = 50.0
@@ -2095,7 +2272,7 @@ if per['fase'] == 'BASE':
     st.caption('Z4 y series tachadas: en fase de Base aún no se usan.')
 
 # ---------------- Plan semanal ----------------
-EMOJI_DEP = {'Natación': '🔵', 'Ciclismo': '🟢', 'Carrera': '🟠',
+EMOJI_DEP = {'Natación': '🔵', 'Ciclismo': '🟢', 'Carrera': '🟠', 'Fuerza': '🟣',
              'Descanso': '⚪', 'Movilidad': '⚪', 'Competencia': '🏁'}
 
 
@@ -2109,7 +2286,7 @@ def _render_sesion(s, recalc=None, hoy=False):
             dur = 0
         linea = f"{pref}{emoji} **{s['dia']} — {s['deporte']}** · {s['tipo']}"
         if dur:
-            linea += f" · {s['km']} km · {dur} min"
+            linea += (f" · {s['km']} km" if s.get('km') else '') + f" · {dur} min"
         st.markdown(linea)
         st.caption(s['detalle'])
         if recalc and str(s['dia']).startswith(recalc['dia']) and recalc['decision'] != 'MANTENER':
@@ -2182,6 +2359,12 @@ else:
     if meta['nat_intro']:
         st.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
                    'por ser la disciplina más técnica del 70.3.')
+    if meta.get('n_fuerza'):
+        st.caption(f"💪 Incluye **{meta['n_fuerza']} sesión(es) de fuerza** (piernas y core) y "
+                   f"**desnivel prescrito** (D+ ~{meta['dplus_bike']} m en la bici y "
+                   f"~{meta['dplus_run']} m en la tirada larga): la fuerza mejora economía y "
+                   f"previene lesiones, y el trabajo en cuesta/bajada añade potencia y tolerancia "
+                   f"muscular, pilares de un 70.3.")
     _hoy = _sesion_de_hoy(plan)
     if _hoy is not None:
         st.markdown('**🎯 Tu entrenamiento de hoy**')
@@ -2212,7 +2395,10 @@ if explicacion_plan:
 else:
     st.info(f"💡 Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
             f"con {per['semanas_restantes']} semanas para la competencia. "
-            f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas.")
+            f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas. "
+            f"Además del nado, la bici y la carrera, incluye **fuerza** de piernas y core (te hace "
+            f"más eficiente y previene lesiones) y **desnivel** —subidas en bici para ganar potencia "
+            f"y bajadas en carrera para que el músculo aguante sin agujetas el día del 70.3.")
 
 # ---------------- Plan de competencia ----------------
 if per['fase'] in ('COMPETENCIA', 'TAPERING'):
@@ -2234,3 +2420,4 @@ with st.expander('ⓘ Para entender tu plan (glosario)'):
 
 st.caption('Demostrador del TFM «Sistema de Análisis Fisiológico y Planificación '
            'Adaptativa — Triatlón 70.3». El LLM/plantillas explican; los modelos deciden.')
+# fin app.py
