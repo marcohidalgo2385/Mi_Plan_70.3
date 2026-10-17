@@ -1,3 +1,7 @@
+# Entorno FIJADO para reproducibilidad (local y Streamlit Cloud).
+# ⚠️ En Streamlit Cloud: Settings → Python version = 3.12 (estas versiones no
+#    tienen wheels para Python 3.14).
+
 streamlit==1.39.0
 pandas==2.2.3
 numpy==1.26.4
@@ -12,9 +16,10 @@ google-generativeai==0.8.3
 stravalib==2.5.0
 garminconnect==0.2.25
 
-# Inferencia con los modelos entrenados (XGBoost + KMeans del notebook).
-# scikit-learn 1.6.1 = misma versión con la que se serializaron los .joblib.
+# Inferencia con los modelos de transferencia (XGBoost) del notebook v7.
+# Mismas versiones que instala el notebook, para que los modelos se carguen sin problemas.
+# xgboost 2.1.4 corrige la incompatibilidad de 2.1.3 con scikit-learn 1.6.
 scikit-learn==1.6.1
-xgboost==2.1.3
+xgboost==2.1.4
 joblib==1.4.2
 pyarrow==17.0.0
