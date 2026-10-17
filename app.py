@@ -16,6 +16,7 @@ Requisitos: streamlit, pandas, numpy, matplotlib (pip install -r requirements)
 """
 
 import os
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 
@@ -51,30 +52,103 @@ except ImportError:
 # ----------------------------------------------------------------------------
 # Configuración general y estilos
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title='Mi plan 70.3', page_icon='🔴', layout='centered')
+st.set_page_config(page_title='Mi plan 70.3', page_icon='🔴', layout='wide',
+                   initial_sidebar_state='collapsed')
 
 st.markdown("""
 <style>
-  /* Ocultar el "andamiaje" de Streamlit (sin tocar el header: en móvil contiene
-     el botón para abrir la barra lateral). toolbarMode="minimal" limpia el resto. */
-  #MainMenu, footer {visibility: hidden;}
-  .block-container {padding-top: 1.2rem; padding-bottom: 2rem;
-                    max-width: 820px;}
-  /* Paleta unificada (azul #1d6fa5 + acento cálido), coherente con el tema */
+  /* Lienzo: ancho cómodo y centrado, menos aire vertical entre bloques */
+  #MainMenu, footer, [data-testid="stAppDeployButton"] {visibility: hidden;}
+  .block-container, [data-testid="stMainBlockContainer"] {max-width: 1120px; margin: 0 auto;
+                    padding: 3rem 1.6rem 2rem;}
+  div[data-testid="stVerticalBlock"] {gap: 0.7rem;}
+  h3 {font-size: 1.12rem !important; padding: .4rem 0 .1rem !important;}
+  hr {margin: .5rem 0 !important;}
+  div[data-testid="stVerticalBlockBorderWrapper"] {border-radius: 14px;}
+  div[data-testid="stExpander"] details {border-radius: 12px;}
+  div[data-testid="stExpander"] summary p {font-weight: 600;}
+  /* Paleta de la app también si el tema (.streamlit/config.toml) no se carga */
+  button[kind="primary"], a[kind="primary"],
+  [data-testid="stBaseButton-primary"], [data-testid="stBaseLinkButton-primary"] {
+      background:#1d6fa5 !important; border-color:#1d6fa5 !important; color:#fff !important;}
+  .stButton>button, .stDownloadButton>button, .stLinkButton>a {border-radius:10px; font-weight:700;}
+
+  /* Cabecera */
+  .brand {font-size:1.7rem; font-weight:800; color:#0B2A4A; line-height:1.1;}
+  .brand .dot {display:inline-block; width:.62em; height:.62em; border-radius:50%;
+               background:#ef4444; margin-right:.4em; vertical-align:.05em;}
+  .hola {font-size:1.02rem; font-weight:700; color:#16202b; margin-top:4px;}
+  .frase {font-size:.88rem; color:#5b6670; font-style:italic; margin-top:1px;}
+
+  /* Configuración */
+  .setup-head {display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline; margin-bottom:-.3rem;}
+  .setup-head b {font-size:1.05rem; color:#0B2A4A;}
+  .setup-head span {font-size:.85rem; color:#ba7517; font-weight:600;}
+  .paso {font-weight:700; color:#16202b; display:flex; align-items:center; gap:.5rem; margin-bottom:.1rem;}
+  .paso .num {display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px;
+              border-radius:50%; background:#eef3f7; color:#1d6fa5; font-size:.8rem; border:1px solid #d8e3ec;}
+  .paso .num.ok {background:#1d9e75; color:#fff; border-color:#1d9e75;}
+  .ok-line {background:#e8f6f0; color:#11694c; border-radius:8px; padding:7px 10px; font-size:.88rem; font-weight:600;}
+  .resumen {display:flex; flex-wrap:wrap; gap:6px;}
+  .pill {background:#eef3f7; border:1px solid #d8e3ec; border-radius:999px; padding:4px 11px;
+         font-size:.82rem; color:#16202b; white-space:nowrap;}
+  .preview {font-size:.78rem; font-weight:700; letter-spacing:1.5px; color:#9aa3ad;
+            text-transform:uppercase; margin:.3rem 0 -.3rem;}
+
+  /* Sesión de hoy */
+  .hoy-card {background:linear-gradient(135deg,#0B2A4A 0%,#13456F 60%,#1d6fa5 100%); color:#fff;
+             border-radius:16px; padding:16px 20px; box-shadow:0 4px 16px rgba(11,42,74,.18);}
+  .hoy-card .eyebrow {color:#8fd0ff; font-size:.72rem; font-weight:700; letter-spacing:2px;}
+  .hoy-card .titulo {font-size:1.3rem; font-weight:800; margin-top:3px;}
+  .hoy-card .meta {color:#FFB38F; font-weight:700; margin:2px 0 6px;}
+  .hoy-card .det {color:#dbe9f5; font-size:.9rem; line-height:1.4;}
+
+  /* Indicadores (2 x 2) */
+  .kpis {display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px;}
+  .kpis.cuatro {grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
+  .kpi {background:#fff; border:1px solid #e2e8ee; border-radius:12px; padding:10px 13px;}
+  .kpi .lab {font-size:.75rem; color:#5b6670; text-transform:uppercase; letter-spacing:.5px; font-weight:600;}
+  .kpi .val {font-size:clamp(1.05rem,2vw,1.35rem); font-weight:800; color:#16202b; line-height:1.15;
+            margin-top:2px; overflow-wrap:break-word;}
+  .kpi .sub {font-size:.78rem; color:#5b6670; margin-top:2px;}
+  .kpi .bar {height:5px; background:#eef3f7; border-radius:4px; margin-top:6px; overflow:hidden;}
+  .kpi .bar div {height:100%; background:#1d6fa5; border-radius:4px;}
+  div[data-testid="stMetric"] {background:#fff; border:1px solid #e2e8ee; border-radius:12px; padding:10px 14px;}
+
+  /* Pestañas */
+  .stTabs [data-baseweb="tab-list"] {gap:2px; border-bottom:1px solid #e2e8ee;}
+  .stTabs [data-baseweb="tab"] {padding:8px 14px; font-weight:600;}
+  .stTabs [data-baseweb="tab-panel"] {padding-top:.8rem;}
+
+  /* Semana en rejilla */
+  .semana {display:grid; grid-template-columns:repeat(auto-fill,minmax(235px,1fr)); gap:10px;}
+  .ses {background:#fff; border:1px solid #e2e8ee; border-top:4px solid #c3ccd5;
+        border-radius:12px; padding:10px 12px;}
+  .ses.hoy {box-shadow:0 0 0 2px #1d6fa5; }
+  .ses .dia {font-size:.75rem; font-weight:700; color:#5b6670; text-transform:uppercase; letter-spacing:.5px;}
+  .ses .dia span {background:#1d6fa5; color:#fff; border-radius:6px; padding:1px 6px; margin-left:6px; font-size:.68rem;}
+  .ses .dep {font-weight:800; color:#16202b; margin-top:2px;}
+  .ses .tipo {font-size:.85rem; color:#1d6fa5; font-weight:600;}
+  .ses .meta {font-size:.8rem; color:#16202b; font-weight:700; margin-top:2px;}
+  .ses .det {font-size:.8rem; color:#5b6670; line-height:1.35; margin-top:4px;}
+  .ses .ajuste {margin-top:6px; font-size:.78rem; font-weight:700; color:#ba7517;}
+
+  /* Chips de zonas */
   .chip {display:inline-block; background:#eef3f7; border:1px solid #d8e3ec;
-         border-radius:12px; padding:10px 16px; margin:4px; text-align:center;}
+         border-radius:12px; padding:9px 15px; margin:4px; text-align:center;}
   .chip .lab {color:#1d6fa5; font-weight:700; font-size:0.8rem;}
   .chip .val {color:#16202b; font-weight:700; font-size:1.0rem;}
   .chip.off {background:#f3f4f6; border-color:#dfe3e8;}
   .chip.off .lab, .chip.off .val {color:#9aa3ad; text-decoration:line-through;}
-  .badge {display:inline-block; border-radius:14px; padding:4px 14px;
-          font-weight:700; font-size:0.85rem;}
-  div[data-testid="stMetric"] {background:#ffffff; border:1px solid #e2e8ee;
-          border-radius:12px; padding:14px;}
-  /* Botones más "app": esquinas suaves y peso */
-  .stButton>button, .stDownloadButton>button {border-radius:10px; font-weight:700;}
-  /* Imágenes (gráficos) que se adaptan al ancho del móvil */
+  .badge {display:inline-block; border-radius:14px; padding:4px 14px; font-weight:700; font-size:0.85rem;}
   div[data-testid="stImage"] img {max-width:100%; height:auto;}
+
+  /* Móvil */
+  @media (max-width: 640px) {
+    .block-container, [data-testid="stMainBlockContainer"] {padding: 3.4rem .9rem 1.5rem;}
+    .brand {font-size:1.4rem;}
+    .hoy-card .titulo {font-size:1.12rem;}
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -164,6 +238,14 @@ GLOSARIO = {
 # Utilidades de formato
 # ----------------------------------------------------------------------------
 ESTADO_PLAN_PATH = '.plan_estado.json'
+
+
+def md_a_html(txt):
+    """Escapa el texto y convierte **negritas** a HTML (tarjetas de sesión)."""
+    import html as _html
+    s = _html.escape(str(txt), quote=False)
+    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', s)
+
 
 
 def _estado_plan_load():
@@ -1697,25 +1779,20 @@ hay_datos = not datos['perfiles'].empty
 # Procesa el retorno de Strava (?code=...) ANTES de pintar la interfaz
 handle_strava_callback()
 
-# ---------------- Barra lateral: solo idioma y ajustes secundarios ----------------
-# Lo imprescindible para generar el plan (datos, nivel, sexo y fechas) se configura en la
-# página principal, a la vista. La barra lateral queda para opciones que casi nadie toca.
-with st.sidebar:
-    st.markdown('### 🔴 Mi plan 70.3')
-    idioma = IDIOMAS[st.radio('🌐 Idioma / Language', list(IDIOMAS.keys()),
-                              horizontal=True, key='idioma_sel')]
-    st.divider()
-    st.caption('Tu plan se configura en la página principal. Aquí solo hay ajustes de la '
-               'cuenta y opciones de demostración.')
-
+# ---------------- Datos base ----------------
 # Perfil base de demostración; con Strava, el historial real sustituye a las actividades
 perfil_df, fitness, acts = datos_demo()
 perfil_row = perfil_df.set_index('athlete').loc['Demo']
 pred_bici = 26.5
 atleta = 'Demo'
 
-# ---------------- Cabecera ----------------
-st.title('Mi plan 70.3')
+# ---------------- Cabecera: marca, saludo e idioma en una sola franja ----------------
+_hdr_l, _hdr_r = st.columns([5, 1.1], vertical_alignment='center')
+with _hdr_r:
+    idioma = IDIOMAS[st.selectbox('Idioma / Language', list(IDIOMAS.keys()), key='idioma_sel',
+                                  label_visibility='collapsed')]
+_hdr_slot = _hdr_l.empty()   # se completa con la frase del día cuando se conoce la fase
+
 nombre = None
 if 'strava_token' in st.session_state:
     nombre = fetch_strava_athlete_name(st.session_state['strava_token'])
@@ -1734,9 +1811,8 @@ FRASES_DIA = [
     "tu mejor sesión es la que te deja con ganas de la siguiente.",
 ]
 frase_base = FRASES_DIA[date.today().timetuple().tm_yday % len(FRASES_DIA)]
-st.markdown(f"#### {t('hola', n=nombre)}")
 
-# ---------------- Configura tu plan (siempre en la página principal) ----------------
+# ---------------- Configuración del plan ----------------
 # Fecha de inicio = ANCLA del plan, persistida por usuario (por atleta de Strava; 'demo' si no).
 _uk = 'demo'
 if st.session_state.get('strava_token'):
@@ -1754,26 +1830,32 @@ _paso_datos = _tiene_acts or st.session_state.get('modo_demo', False)
 _paso_fechas = st.session_state['inicio_fijado']
 _config_ok = _paso_datos and _paso_fechas
 
-_nivel_txt = t('nuevo') if st.session_state.get('perfil_tipo_sel', 'nuevo') == 'nuevo' else t('experto')
-_resumen = (f"⚙️ Tu plan: {_nivel_txt} · inicio "
-            f"{st.session_state['inicio_plan_val']:%d/%m/%Y} · "
-            + ('datos de Strava' if _tiene_acts else 'datos de demostración') + "  —  pulsa para cambiarlo")
-if not _config_ok:
-    _faltan = []
-    if not _paso_datos:
-        _faltan.append('conectar tus datos')
-    if not _paso_fechas:
-        _faltan.append('fijar la fecha de inicio')
-    st.warning('**Antes de empezar, completa la configuración:** ' + ' y '.join(_faltan) +
-               '. Sin esos pasos el plan se calcula con datos de demostración.')
 
-with st.expander(_resumen if _config_ok else '⚙️ Configura tu plan (3 pasos)', expanded=not _config_ok):
-    # Paso 1 · Datos de entrenamiento
-    st.markdown(f"**1 · Tus datos de entrenamiento** {'✅' if _paso_datos else ''}")
+def _paso_html(n, titulo, hecho):
+    return (f'<div class="paso"><span class="num{" ok" if hecho else ""}">{"✓" if hecho else n}</span>'
+            f'{titulo}</div>')
+
+
+# Primera visita: los tres pasos en una sola tarjeta, uno junto a otro, sin bajar por la página.
+# Plan ya configurado: una línea de resumen con un botón «Editar» que despliega los mismos pasos.
+if not _config_ok:
+    _n_ok = int(_paso_datos) + 1 + int(_paso_fechas)
+    st.markdown('<div class="setup-head"><b>Crea tu plan en 3 pasos</b>'
+                f'<span>{_n_ok} de 3 listos · mientras tanto ves un plan de ejemplo</span></div>',
+                unsafe_allow_html=True)
+    _cfg = st.container(border=True)
+    c1, c2, c3 = _cfg.columns(3, gap='medium')
+else:
+    _r1, _r2 = st.columns([6, 1], vertical_alignment='center')
+    _resumen_slot = _r1.empty()
+    c1 = c2 = c3 = _r2.popover('✏️ Editar', use_container_width=True)
+
+with c1:
+    st.markdown(_paso_html(1, 'Tus datos', _paso_datos), unsafe_allow_html=True)
     _FUENTES = ['strava', 'garmin']
     if st.session_state.get('fuente_sel') not in _FUENTES:
         st.session_state.pop('fuente_sel', None)
-    fuente = st.radio(t('de_donde'), _FUENTES, horizontal=True,
+    fuente = st.radio(t('de_donde'), _FUENTES, horizontal=True, label_visibility='collapsed',
                       format_func=lambda v: {'strava': t('opt_strava'), 'garmin': t('opt_garmin')}[v],
                       key='fuente_sel')
     if fuente == 'strava':
@@ -1782,20 +1864,15 @@ with st.expander(_resumen if _config_ok else '⚙️ Configura tu plan (3 pasos)
         elif not (STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET):
             st.caption('Configura `strava_client_id` y `strava_client_secret` en secrets.toml.')
         elif not _conectado:
-            c1, c2 = st.columns(2)
             auth_url = get_strava_auth_url()
             if auth_url:
-                c1.link_button('🔗 Conectar con Strava', auth_url, type='primary',
+                st.link_button('🔗 Conectar con Strava', auth_url, type='primary',
                                use_container_width=True)
-            if c2.button('Probar con datos de demostración', use_container_width=True):
-                st.session_state['modo_demo'] = True
-                st.rerun()
-            st.caption('Tus zonas, ritmos y carga se calculan con tus actividades reales de Strava.')
         else:
-            c1, c2 = st.columns([3, 2])
             _txt_acts = f' · {len(_sa_prev)} actividades' if _tiene_acts else ''
-            c1.success(f'✅ Strava conectado{f" · {nombre}" if nombre != "triatleta" else ""}{_txt_acts}')
-            if c2.button('🔄 Sincronizar actividades', type='primary' if not _tiene_acts else 'secondary',
+            st.markdown(f'<div class="ok-line">✅ Strava conectado{_txt_acts}</div>',
+                        unsafe_allow_html=True)
+            if st.button('🔄 Sincronizar actividades', type='secondary' if _tiene_acts else 'primary',
                          use_container_width=True):
                 a = fetch_strava_activities(st.session_state['strava_token'],
                                             days=st.session_state.get('dias_sync', 90))
@@ -1805,75 +1882,76 @@ with st.expander(_resumen if _config_ok else '⚙️ Configura tu plan (3 pasos)
                     st.rerun()
                 else:
                     st.warning('Strava no devolvió actividades en ese rango. Amplía los días en '
-                               'la barra lateral o revisa que tu cuenta tenga entrenamientos.')
+                               'la barra lateral (›) o revisa que tu cuenta tenga entrenamientos.')
     else:
-        st.info('⌚ La conexión directa con Garmin Connect es el próximo paso del proyecto. '
-                'Mientras tanto, usa Strava o los datos de demostración.')
-        if st.button('Probar con datos de demostración', key='demo_garmin'):
+        st.caption('⌚ La conexión con Garmin Connect es el siguiente paso del proyecto. '
+                   'Mientras tanto, usa Strava o los datos de demostración.')
+    if not _tiene_acts:
+        if st.session_state.get('modo_demo'):
+            st.caption('🧪 Estás usando datos de demostración.')
+        elif st.button('🧪 Probar con datos de demostración', use_container_width=True, key='demo_btn'):
             st.session_state['modo_demo'] = True
             st.rerun()
 
-    st.divider()
-    # Paso 2 · Perfil
-    st.markdown('**2 · Tu perfil**')
-    c1, c2 = st.columns(2)
-    perfil_tipo = c1.radio(t('tu_perfil'), ['nuevo', 'experimentado'],
+with c2:
+    st.markdown(_paso_html(2, 'Tu perfil', True), unsafe_allow_html=True)
+    perfil_tipo = st.radio(t('tu_perfil'), ['nuevo', 'experimentado'], horizontal=True,
                            format_func=lambda v: t('nuevo') if v == 'nuevo' else t('experto'),
                            key='perfil_tipo_sel',
                            help='Nuevo: vienes de un solo deporte. Con experiencia: ya has '
                                 'entrenado triatlón. Cambia la duración mínima del plan y la '
                                 'progresión de los ritmos.')
-    sexo = c2.radio(t('sexo'), ['M', 'F'], horizontal=True, key='sexo_sel',
+    sexo = st.radio(t('sexo'), ['M', 'F'], horizontal=True, key='sexo_sel',
                     format_func=lambda v: t('hombre') if v == 'M' else t('mujer'),
                     help='Ajusta el cálculo de la carga (TRIMP) y las estimaciones de velocidad.')
-    c1.caption(f"Plan mínimo: {SEMANAS_MINIMAS[perfil_tipo]} semanas "
-               f"({'6 meses' if perfil_tipo == 'nuevo' else '3 meses'})")
+    st.caption(f"Plan mínimo: {SEMANAS_MINIMAS[perfil_tipo]} semanas "
+               f"({'6 meses' if perfil_tipo == 'nuevo' else '3 meses'}).")
+    objetivo = None
+    if perfil_tipo == 'experimentado':
+        st.caption('🏁 Tu último 70.3 (opcional, para un plan orientado a marca)')
+        _a, _b, _c = st.columns(3)
+        t_nat = _a.text_input('Natación', '0:42')
+        t_bici = _b.text_input('Bici', '2:52')
+        t_run = _c.text_input('Carrera', '2:01')
+        _a, _b = st.columns(2)
+        t_tot = _a.text_input('Total', '5:45')
+        t_objetivo = _b.text_input('Objetivo', '5:30')
 
-    st.divider()
-    # Paso 3 · Fechas
-    st.markdown(f"**3 · Tus fechas** {'✅' if _paso_fechas else ''}")
-    c1, c2 = st.columns(2)
+with c3:
+    st.markdown(_paso_html(3, 'Tus fechas', _paso_fechas), unsafe_allow_html=True)
+    _a, _b = st.columns([3, 2], vertical_alignment='bottom')
     if st.session_state['inicio_fijado']:
         fecha_inicio = st.session_state['inicio_plan_val']
-        c1.date_input(t('fecha_inicio'), value=fecha_inicio, disabled=True,
+        _a.date_input(t('fecha_inicio'), value=fecha_inicio, disabled=True,
                       help='Fecha ancla del plan: queda fija para que la semana avance día a día.')
-        if c1.button(t('reiniciar') + ' plan', help='Desbloquear para elegir otra fecha de inicio'):
+        if _b.button('Cambiar', use_container_width=True,
+                     help='Desbloquea la fecha para elegir otro inicio del plan'):
             st.session_state['inicio_fijado'] = False
             st.rerun()
     else:
-        _sel = c1.date_input(t('fecha_inicio'), value=st.session_state['inicio_plan_val'],
+        _sel = _a.date_input(t('fecha_inicio'), value=st.session_state['inicio_plan_val'],
                              max_value=date.today(),
                              help='El día en que empiezas (o empezaste) el plan.')
         fecha_inicio = _sel
-        if c1.button('🔒 Fijar fecha de inicio', type='primary'):
+        if _b.button('🔒 Fijar', type='primary', use_container_width=True):
             st.session_state['inicio_plan_val'] = _sel
             st.session_state['inicio_fijado'] = True
             guardar_inicio_plan(_sel, _uk)
             st.rerun()
-    usa_fecha = c2.toggle(t('tengo_fecha'), value=True)
+    usa_fecha = st.toggle(t('tengo_fecha'), value=True)
     if usa_fecha:
-        fecha_comp = c2.date_input(t('cuando_703'),
+        fecha_comp = st.date_input(t('cuando_703'),
                                    value=fecha_inicio + timedelta(weeks=SEMANAS_MINIMAS[perfil_tipo]))
     else:
-        meses = c2.slider('Meses de plan', 3, 12, 6 if perfil_tipo == 'nuevo' else 3)
+        meses = st.slider('Meses de plan', 3, 12, 6 if perfil_tipo == 'nuevo' else 3)
         fecha_comp = fecha_inicio + timedelta(weeks=meses * 4)
-
-    objetivo = None
-    if perfil_tipo == 'experimentado':
-        st.divider()
-        st.markdown('**4 · Tu último 70.3** (opcional, para un plan orientado a marca)')
-        c1, c2, c3, c4, c5 = st.columns(5)
-        t_nat = c1.text_input('Natación', '0:42')
-        t_bici = c2.text_input('Bici', '2:52')
-        t_run = c3.text_input('Carrera', '2:01')
-        t_tot = c4.text_input('Total', '5:45')
-        t_objetivo = c5.text_input('Objetivo', '5:30')
 
 # Total de semanas reales del plan (límite del simulador de la barra lateral)
 sem_tot_plan = max(int(np.ceil((pd.Timestamp(fecha_comp) - pd.Timestamp(fecha_inicio)).days / 7)), 1)
 
-# ---------------- Barra lateral: cuenta y opciones de demostración ----------------
+# ---------------- Barra lateral (plegada): cuenta y opciones de demostración ----------------
 with st.sidebar:
+    st.markdown('### ⚙️ Ajustes')
     if fuente == 'strava' and _conectado:
         st.markdown('**Cuenta de Strava**')
         st.session_state['dias_sync'] = st.slider('Días a sincronizar', 30, 365,
@@ -1892,8 +1970,8 @@ with st.sidebar:
                            use_container_width=True)
             st.link_button('Revocar acceso (apps)', 'https://www.strava.com/settings/apps',
                            use_container_width=True)
-    with st.expander('⚙️ Opciones avanzadas (demo)', expanded=False):
-        sim_on = st.toggle('🎛️ Simular semana', value=False,
+    with st.expander('🎛️ Opciones de demostración', expanded=False):
+        sim_on = st.toggle('Simular semana', value=False,
                            help='Para presentaciones: fuerza la semana del plan sin depender '
                                 'de la fecha real. Recalcula fase, carga y plan.')
         semana_sim = (st.slider('Semana actual (simulada)', 1, sem_tot_plan,
@@ -1910,18 +1988,23 @@ if fuente == 'strava':
 
 per = calcular_fase(fecha_comp, perfil_tipo, fecha_inicio, semana_sim)
 
-# --- Frase del día (banner destacado, generada por Gemini si está disponible) ---
+# --- Cabecera completa: saludo y frase del día (Gemini si está disponible) ---
 _frase = generar_frase_dia(nombre, per['fase'], date.today().toordinal(), frase_base)
-st.markdown(
-    '<div style="background:linear-gradient(100deg,#0B2A4A 0%,#13456F 55%,#1d6fa5 100%);'
-    'border-radius:12px;padding:10px 16px;margin:2px 0 12px;'
-    'box-shadow:0 2px 12px rgba(11,42,74,.25);">'
-    '<div style="color:#8fd0ff;font-size:.72rem;font-weight:700;letter-spacing:2px;">'
-    'FRASE DEL DÍA</div>'
-    f'<div style="color:#fff;font-size:1.0rem;font-weight:700;line-height:1.3;margin-top:2px;">'
-    f'&ldquo;{_frase}&rdquo;</div>'
-    f'<div style="color:#FF8A5B;font-size:.8rem;font-weight:700;margin-top:4px;">— {nombre} 💪</div>'
-    '</div>', unsafe_allow_html=True)
+_hdr_slot.markdown(
+    '<div class="brand"><span class="dot"></span>Mi plan 70.3</div>'
+    f'<div class="hola">{t("hola", n=nombre)}</div>'
+    f'<div class="frase">“{_frase}”</div>', unsafe_allow_html=True)
+
+if _config_ok:
+    _chips = [('🧭', t('nuevo') if perfil_tipo == 'nuevo' else t('experto')),
+              ('🚻', t('hombre') if sexo == 'M' else t('mujer')),
+              ('▶️', f'inicio {fecha_inicio:%d/%m/%Y}'),
+              ('🏁', f'70.3 el {fecha_comp:%d/%m/%Y}'),
+              ('📱' if usando_strava else '🧪',
+               f'Strava · {len(acts)} actividades' if usando_strava else 'datos de demostración')]
+    _resumen_slot.markdown('<div class="resumen">' + ''.join(
+        f'<span class="pill">{ic} {tx}</span>' for ic, tx in _chips) + '</div>',
+        unsafe_allow_html=True)
 
 # En demo, las actividades reflejan las semanas ya transcurridas del plan
 if not usando_strava:
@@ -1975,24 +2058,75 @@ _bb_dec = st.session_state.get('bb') if st.session_state.get('recalc_done') else
 _st_dec = st.session_state.get('stress') if st.session_state.get('recalc_done') else None
 tipo_semana, motivo_semana = decidir_tipo_semana(fitness, _bb_dec, _st_dec)
 
-# --- Tarjeta de la SESIÓN DE HOY (lo primero que el atleta quiere ver) ---
+# ---------------- Panel de hoy: sesión + indicadores clave, a la vista ----------------
+if not _config_ok:
+    st.markdown('<div class="preview">Vista previa con datos de demostración</div>',
+                unsafe_allow_html=True)
+
 _plan_hoy_card, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
 _dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
 _ses_hoy_card = next((s for s in _plan_hoy_card if str(s['dia']).startswith(_dia_hoy)), None)
-if _ses_hoy_card:
-    _emo = {'Natación': '🏊', 'Ciclismo': '🚴', 'Carrera': '🏃', 'Descanso': '😴',
-            'Movilidad': '🧘', 'Competencia': '🏁'}.get(_ses_hoy_card['deporte'], '•')
-    _meta_line = (f"{_ses_hoy_card['km']} km · {_ses_hoy_card['dur_min']} min"
-                  if _ses_hoy_card.get('dur_min') else 'Día de descanso / recuperación')
-    st.markdown(
-        '<div style="background:#ffffff;border:1px solid #d8e3ec;border-left:6px solid #1d6fa5;'
-        'border-radius:14px;padding:16px 18px;margin:2px 0 18px;box-shadow:0 1px 6px rgba(11,42,74,.08);">'
-        '<div style="color:#1d6fa5;font-size:.72rem;font-weight:700;letter-spacing:2px;">TU SESIÓN DE HOY</div>'
-        f'<div style="font-size:1.25rem;font-weight:800;color:#16202b;margin-top:2px;">'
-        f'{_emo} {_ses_hoy_card["deporte"]} — {_ses_hoy_card["tipo"]}</div>'
-        f'<div style="color:#1d6fa5;font-weight:700;margin:2px 0 6px;">{_meta_line}</div>'
-        f'<div style="color:#3a4650;font-size:.9rem;line-height:1.35;">{_ses_hoy_card["detalle"]}</div>'
-        '</div>', unsafe_allow_html=True)
+
+_col_hoy, _col_kpi = st.columns([1.45, 1], gap='medium')
+with _col_hoy:
+    if _ses_hoy_card:
+        _emo = {'Natación': '🏊', 'Ciclismo': '🚴', 'Carrera': '🏃', 'Descanso': '😴',
+                'Movilidad': '🧘', 'Competencia': '🏁', 'Fuerza': '💪'}.get(_ses_hoy_card['deporte'], '•')
+        _meta_line = (f"{_ses_hoy_card['km']} km · {_ses_hoy_card['dur_min']} min"
+                      if _ses_hoy_card.get('dur_min') else 'Día de descanso / recuperación')
+        st.markdown(
+            '<div class="hoy-card">'
+            f'<div class="eyebrow">TU SESIÓN DE HOY · {_dia_hoy.upper()}</div>'
+            f'<div class="titulo">{_emo} {_ses_hoy_card["deporte"]} — {_ses_hoy_card["tipo"]}</div>'
+            f'<div class="meta">{_meta_line}</div>'
+            f'<div class="det">{md_a_html(_ses_hoy_card["detalle"])}</div>'
+            '</div>', unsafe_allow_html=True)
+
+    # Registro matinal: plegado para no ocupar espacio; al recalcular, aparece el ajuste
+    bb_hoy = float(st.session_state.get('bb', 78))
+    sueno_hoy = float(st.session_state.get('sueno', 7.6))
+    stress_hoy = float(st.session_state.get('stress', 28))
+    sleep_hoy = float(st.session_state.get('sleep_score', 75))
+    with st.expander('☀️ ¿Cómo amaneciste? Registra sueño, Body Battery y estrés (30 s)'):
+        with st.form('hoy', border=False):
+            _f1, _f2, _f3 = st.columns(3)
+            sueno_in = _f1.number_input('Horas de sueño', 0.0, 12.0, sueno_hoy, 0.1)
+            bb_in = _f2.number_input('Body Battery', 0, 100, int(bb_hoy))
+            stress_in = _f3.number_input('Estrés', 0, 100, int(stress_hoy))
+            score_in = st.slider('Sleep Score / calidad del sueño (0-100)', 0, 100,
+                                 int(sleep_hoy),
+                                 help='El número de tu reloj (Garmin Sleep Score): mide la '
+                                      'CALIDAD del sueño, no las horas. Mala < 60.')
+            _f1, _f2 = st.columns([1, 1], vertical_alignment='center')
+            enfermo_in = _f1.checkbox('Me siento enfermo',
+                                      value=bool(st.session_state.get('enfermo', False)))
+            if _f2.form_submit_button('Recalcular mi día', type='primary', use_container_width=True):
+                st.session_state.update(sueno=sueno_in, bb=bb_in, stress=stress_in,
+                                        enfermo=enfermo_in, sleep_score=score_in,
+                                        recalc_done=True)
+                st.rerun()
+
+with _col_kpi:
+    _ctl_now = (float(fitness['CTL'].iloc[-1])
+                if (not fitness.empty and 'CTL' in fitness.columns) else float('nan'))
+    _prog = int(min(max(per['semana_actual'] / max(per['semanas_totales'], 1), 0), 1) * 100)
+    _tipo_col = {'DESCANSO': '#a32d2d', 'REGENERATIVO': '#ba7517',
+                 'MANTENIMIENTO': '#1d6fa5', 'CARGA': '#1d9e75'}.get(tipo_semana, '#1d6fa5')
+    _mot = str(motivo_semana).replace('"', "'")
+    _kpis_html = [
+        ('Fase', NOMBRE_FASE.get(per['fase'], per['fase']),
+         f"semana {per['semana_actual']} de {per['semanas_totales']}"
+         f'<div class="bar"><div style="width:{_prog}%"></div></div>', '', ''),
+        ('Tu 70.3', f"{per['semanas_restantes']} sem", f'{fecha_comp:%d/%m/%Y}', '', ''),
+        ('Semana de', NOMBRE_TIPO[tipo_semana], 'según tu frescura (TSB)', _tipo_col, _mot),
+        ('Forma (CTL)', '—' if np.isnan(_ctl_now) else f'{_ctl_now:.0f}',
+         f'objetivo {CTL_OBJETIVO_70_3}', '', GLOSARIO['CTL / ATL / TSB'].replace('"', "'")),
+    ]
+    st.markdown('<div class="kpis">' + ''.join(
+        f'<div class="kpi" title="{tip}"><div class="lab">{lab}</div>'
+        f'<div class="val"{f" style=color:{col}" if col else ""}>{val}</div>'
+        f'<div class="sub">{sub}</div></div>'
+        for lab, val, sub, col, tip in _kpis_html) + '</div>', unsafe_allow_html=True)
 
 if not per['plan_viable']:
     st.warning(f"⚠ Para un atleta {perfil_tipo} se recomiendan al menos "
@@ -2010,70 +2144,28 @@ if objetivo:
                    f"apunta, pero la estimación realista queda por encima. "
                    f"La mejora se concentra en la bici.")
 
-# ---------------- Cómo estás hoy ----------------
-recalc_hoy = None  # se rellena si el atleta recalcula su día
-st.subheader(t('h_hoy'))
-
-# métricas (reflejan los valores recalculados o los de referencia)
-bb_hoy = float(st.session_state.get('bb', 78))
-sueno_hoy = float(st.session_state.get('sueno', 7.6))
-stress_hoy = float(st.session_state.get('stress', 28))
-sleep_hoy = float(st.session_state.get('sleep_score', 75))
-# Tarjetas HTML (rejilla responsiva: 2 en móvil, varias en escritorio), con
-# estado en color y tooltip de glosario al pasar el cursor.
-_GREEN, _AMBER, _RED, _NEU = '#1d9e75', '#ba7517', '#a32d2d', '#5b6670'
-_bb_s, _bb_c = (('bien cargado', _GREEN) if bb_hoy >= 60
-                else (('baja', _RED) if bb_hoy < 35 else ('media', _AMBER)))
-_st_s, _st_c = (('bajo', _GREEN) if stress_hoy < 40
-                else (('alto', _RED) if stress_hoy > 70 else ('medio', _AMBER)))
-_su_s, _su_c = (('suficiente', _GREEN) if sueno_hoy >= 7
-                else (('corto', _RED) if sueno_hoy < 6 else ('justo', _AMBER)))
-_sueno_txt = f"{int(sueno_hoy)}h {int((sueno_hoy % 1) * 60):02d}"
+# ---------------- Ajuste del día (solo si el deportista registró cómo amaneció) ----------------
+recalc_hoy = None
 if st.session_state.get('recalc_done'):
+    _GREEN, _AMBER, _RED, _NEU = '#1d9e75', '#ba7517', '#a32d2d', '#5b6670'
+    _bb_s, _bb_c = (('bien cargado', _GREEN) if bb_hoy >= 60
+                    else (('baja', _RED) if bb_hoy < 35 else ('media', _AMBER)))
+    _st_s, _st_c = (('bajo', _GREEN) if stress_hoy < 40
+                    else (('alto', _RED) if stress_hoy > 70 else ('medio', _AMBER)))
+    _su_s, _su_c = (('suficiente', _GREEN) if sueno_hoy >= 7
+                    else (('corto', _RED) if sueno_hoy < 6 else ('justo', _AMBER)))
+    _sueno_txt = f"{int(sueno_hoy)}h {int((sueno_hoy % 1) * 60):02d}"
     _hoy_items = [
         ('Body Battery', f'{bb_hoy:.0f}', _bb_s, _bb_c, GLOSARIO['Body Battery']),
         ('Estrés', f'{stress_hoy:.0f}', _st_s, _st_c, GLOSARIO['Estrés']),
         ('Sueño', _sueno_txt, _su_s, _su_c, GLOSARIO['Sueño']),
         ('Sleep Score', f'{sleep_hoy:.0f}', sleep_score_label(sleep_hoy), _NEU, GLOSARIO['Sleep Score']),
     ]
-else:   # Strava no aporta estas métricas: se muestran vacías hasta que el atleta las introduce
-    _hoy_items = [(k, '—', 'introdúcelo abajo', _NEU, GLOSARIO[k])
-                  for k in ('Body Battery', 'Estrés', 'Sueño', 'Sleep Score')]
-_cards = ''
-for _lab, _val, _stt, _clr, _hlp in _hoy_items:
-    _h = str(_hlp).replace('"', "'")
-    _cards += (f'<div title="{_h}" style="background:#fff;border:1px solid #e2e8ee;'
-               'border-radius:10px;padding:11px 13px;">'
-               f'<div style="font-size:12px;color:#5b6670;">{_lab}</div>'
-               f'<div style="font-size:22px;font-weight:800;color:#16202b;line-height:1.1;'
-               f'margin-top:2px;">{_val}</div>'
-               f'<div style="font-size:12px;font-weight:700;color:{_clr};margin-top:3px;">{_stt}</div></div>')
-st.markdown('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));'
-            f'gap:10px;margin-bottom:6px;">{_cards}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="kpis cuatro">' + ''.join(
+        f'<div class="kpi" title="{str(_hlp).replace(chr(34), chr(39))}"><div class="lab">{_lab}</div>'
+        f'<div class="val">{_val}</div><div class="sub" style="color:{_clr};font-weight:700">{_stt}</div></div>'
+        for _lab, _val, _stt, _clr, _hlp in _hoy_items) + '</div>', unsafe_allow_html=True)
 
-# Formulario persistente: queda visible y recuerda lo último introducido
-with st.expander('☀️ Registra cómo amaneciste (30 segundos): ajusta la sesión de hoy y el tipo de semana',
-                 expanded=st.session_state.get('recalc_done', False)):
-    with st.form('hoy'):
-        st.caption('Introduce tus métricas de esta mañana y pulsa «Recalcular mi día».')
-        c1, c2, c3, c4 = st.columns(4)
-        sueno_in = c1.number_input('Horas de sueño', 0.0, 12.0, sueno_hoy, 0.1)
-        bb_in = c2.number_input('Body Battery', 0, 100, int(bb_hoy))
-        stress_in = c3.number_input('Estrés', 0, 100, int(stress_hoy))
-        enfermo_in = c4.checkbox('Me siento enfermo',
-                                 value=bool(st.session_state.get('enfermo', False)))
-        score_in = st.slider('Sleep Score / calidad del sueño (0-100)', 0, 100,
-                             int(sleep_hoy),
-                             help='El número de tu reloj (Garmin Sleep Score): mide la '
-                                  'CALIDAD del sueño, no las horas. Mala < 60.')
-        st.caption(f'Calidad estimada: **{sleep_score_label(score_in)}**')
-        if st.form_submit_button('Recalcular mi día', type='primary'):
-            st.session_state.update(sueno=sueno_in, bb=bb_in, stress=stress_in,
-                                    enfermo=enfermo_in, sleep_score=score_in,
-                                    recalc_done=True)
-            st.rerun()
-
-if st.session_state.get('recalc_done'):
     dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
     ses_df = datos['sesiones_plan']
     ses_hoy = (ses_df[(ses_df['athlete'] == atleta) &
@@ -2086,13 +2178,9 @@ if st.session_state.get('recalc_done'):
         r = ses_hoy[0]
         sesion_hoy_txt = f"{r.get('deporte', '')} · {r.get('tipo', '')}" + \
                          (f" · {r.get('dur_min')} min" if r.get('dur_min') else '')
-    else:
-        _plan_hoy, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
-        for s in _plan_hoy:
-            if s['dia'] == dia_hoy:
-                sesion_hoy_txt = f"{s['deporte']} · {s['tipo']}" + \
-                                 (f" · {s['dur_min']} min" if s['dur_min'] else '')
-                break
+    elif _ses_hoy_card:
+        sesion_hoy_txt = f"{_ses_hoy_card['deporte']} · {_ses_hoy_card['tipo']}" + \
+                         (f" · {_ses_hoy_card['dur_min']} min" if _ses_hoy_card['dur_min'] else '')
 
     decision, motivos, detalle = actualizar_hoy(
         ses_hoy, zonas, st.session_state['sueno'], st.session_state['bb'],
@@ -2107,17 +2195,9 @@ if st.session_state.get('recalc_done'):
 
     recalc_hoy = {'dia': dia_hoy, 'decision': decision, 'detalle': detalle,
                   'sesion': sesion_hoy_txt}
-    _ss = st.session_state.get('sleep_score')
-    st.caption(f"✓ Recalculado con: sueño {st.session_state['sueno']:.1f} h · "
-               f"Body Battery {st.session_state['bb']} · estrés {st.session_state['stress']}"
-               + (f" · Sleep Score {int(_ss)} («{sleep_score_label(_ss)}»)" if _ss is not None else '')
-               + (' · te sientes enfermo' if st.session_state.get('enfermo') else '')
-               + (f" · sesión de hoy: {sesion_hoy_txt}" if sesion_hoy_txt else ''))
     nivel = {'MANTENER': st.success, 'SUAVIZAR HOY': st.warning,
              'DESCANSO HOY': st.error}[decision]
-    nivel(f"**Recomendación recalculada — {dia_hoy} · {decision}**\n\n"
-          f"Motivos: {', '.join(motivos)}.\n\n{detalle}\n\n"
-          f"_Abajo, en «Tu semana», la sesión de hoy queda marcada con este ajuste._")
+    nivel(f"**Tu día recalculado — {decision}.** Motivos: {', '.join(motivos)}.\n\n{detalle}")
 
 # ---------------- Contenido en pestañas ----------------
 # Lo diario (sesión de hoy y cómo amaneciste) queda arriba; el resto se ordena en
@@ -2323,7 +2403,7 @@ with tab_forma:
 
 with tab_zonas:
     # ---------------- Zonas ----------------
-    st.subheader(t('h_zonas'))
+    st.caption(t('h_zonas'))
     if PLOTLY_OK:
         st.plotly_chart(grafico_zonas_plotly(zonas), use_container_width=True,
                         config={'displayModeBar': False})
@@ -2369,22 +2449,35 @@ with tab_semana:
                  'Descanso': '⚪', 'Movilidad': '⚪', 'Competencia': '🏁'}
 
 
-    def _render_sesion(s, recalc=None, hoy=False):
-        with st.container(border=True):
-            emoji = EMOJI_DEP.get(s['deporte'], '⚪')
-            pref = '🎯 **HOY** · ' if hoy else ''
+    def _render_semana(sesiones, recalc=None):
+        """Semana en rejilla: 7 tarjetas compactas (4 por fila en escritorio, 1 en móvil)."""
+        dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+        tarjetas = ''
+        for s in sesiones:
+            dep = s['deporte']
+            color = {'Natación': '#3b82f6', 'Ciclismo': '#22a06b', 'Carrera': '#f59e0b',
+                     'Fuerza': '#8b5cf6', 'Competencia': '#ef4444'}.get(dep, '#c3ccd5')
             try:
-                dur = s['dur_min']
-            except Exception:
+                dur = int(s['dur_min'] or 0)
+            except (TypeError, ValueError):
                 dur = 0
-            linea = f"{pref}{emoji} **{s['dia']} — {s['deporte']}** · {s['tipo']}"
-            if dur:
-                linea += (f" · {s['km']} km" if s.get('km') else '') + f" · {dur} min"
-            st.markdown(linea)
-            st.caption(s['detalle'])
-            if recalc and str(s['dia']).startswith(recalc['dia']) and recalc['decision'] != 'MANTENER':
-                (st.error if recalc['decision'] == 'DESCANSO HOY' else st.warning)(
-                    f"🔁 Ajuste de hoy ({recalc['decision']}): {recalc['detalle']}")
+            try:
+                km = float(s.get('km') or 0)
+            except (TypeError, ValueError):
+                km = 0.0
+            meta = ' · '.join(x for x in [f'{km:g} km' if km else '', f'{dur} min' if dur else ''] if x)
+            es_hoy = str(s['dia']).startswith(dia_hoy)
+            ajuste = ''
+            if es_hoy and recalc and recalc['decision'] != 'MANTENER':
+                ajuste = f'<div class="ajuste">🔁 {recalc["decision"].capitalize()}</div>'
+            tarjetas += (
+                f'<div class="ses{" hoy" if es_hoy else ""}" style="border-top-color:{color}">'
+                f'<div class="dia">{s["dia"]}{"<span>HOY</span>" if es_hoy else ""}</div>'
+                f'<div class="dep">{EMOJI_DEP.get(dep, "⚪")} {dep}</div>'
+                f'<div class="tipo">{s["tipo"]}</div>'
+                + (f'<div class="meta">{meta}</div>' if meta else '')
+                + f'<div class="det">{md_a_html(s["detalle"])}</div>{ajuste}</div>')
+        st.markdown(f'<div class="semana">{tarjetas}</div>', unsafe_allow_html=True)
 
 
     def _sesion_de_hoy(sesiones):
@@ -2395,7 +2488,6 @@ with tab_semana:
         return None
 
 
-    st.subheader(t('h_semana'))
     if recalc_hoy and recalc_hoy['decision'] != 'MANTENER':
         aviso = st.error if recalc_hoy['decision'] == 'DESCANSO HOY' else st.warning
         aviso(f"🔁 **Ajuste de hoy ({recalc_hoy['dia']} · {recalc_hoy['decision']})** — "
@@ -2406,14 +2498,10 @@ with tab_semana:
     if (not usando_strava) and hay_datos and not ses_df.empty and atleta in ses_df['athlete'].values:
         sem = ses_df[ses_df['athlete'] == atleta]
         plan_tipo = sem['plan_tipo'].iloc[0]
-        st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+        st.markdown(f'<span class="badge" style="background:#e6f1fb;color:#0c447c;">'
                     f'{plan_tipo} · fase {per["fase"].capitalize()}</span>',
                     unsafe_allow_html=True)
         sesiones_sem = [row for _, row in sem.iterrows()]
-        _hoy = _sesion_de_hoy(sesiones_sem)
-        if _hoy is not None:
-            st.markdown('**🎯 Tu entrenamiento de hoy**')
-            _render_sesion(_hoy, recalc_hoy, hoy=True)
         # Resumen de la semana ARRIBA, antes del detalle día a día
         pl = datos['planes_semanales']
         fila = pl[pl['athlete'] == atleta].iloc[0] if not pl.empty else None
@@ -2429,22 +2517,21 @@ with tab_semana:
                     ('Carrera', f"{fila.get('carrera_km', '—')} km"),
                     ('TSB', f"{fila.get('TSB', float('nan')):.1f}")]):
                 col.metric(lab, val)
-        st.caption('Tu semana completa, día a día:')
-        for s in sesiones_sem:
-            _render_sesion(s, recalc_hoy)
+        _render_semana(sesiones_sem, recalc_hoy)
     else:
         # Modo demo / sin notebook: el motor genera una semana ADAPTATIVA y progresiva
         plan, meta = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
         origen = 'datos Strava' if usando_strava else 'modo demo'
-        st.markdown(f'<span class="badge" style="background:#fdecec;color:#ff4b4b;">'
+        st.markdown(f'<span class="badge" style="background:#e6f1fb;color:#0c447c;">'
                     f'Plan adaptativo ({origen}) · semana de {NOMBRE_TIPO[tipo_semana].lower()} · '
                     f'fase {per["fase"].capitalize()} · '
                     f'semana {meta["sem_idx"]} de {meta["sem_tot"]}</span>',
                     unsafe_allow_html=True)
-        st.caption(f"Tipo de semana: **{NOMBRE_TIPO[tipo_semana]}** — {motivo_semana}.")
+        _det_sem = st.expander('ⓘ Cómo se ha construido esta semana')
+        _det_sem.caption(f"Tipo de semana: **{NOMBRE_TIPO[tipo_semana]}** — {motivo_semana}.")
         base_txt = (f"tu frecuencia actual (~{meta['freq_act']:.0f} sesiones/sem) y "
                     if meta['freq_act'] else "tu perfil y ")
-        st.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
+        _det_sem.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
                    f"{base_txt}el avance del plan (semana {meta['sem_idx']}/{meta['sem_tot']}). "
                    "La frecuencia y el volumen suben de forma gradual hacia la carrera para evitar sobrecarga.")
         if meta.get('descarga'):
@@ -2452,18 +2539,14 @@ with tab_semana:
                     'reduce el volumen ~40 % y se baja la intensidad para asimilar la carga '
                     'acumulada y supercompensar. No es perder forma: es cuando el cuerpo se adapta.')
         if meta['nat_intro']:
-            st.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
+            _det_sem.caption('🏊 Aún no registras natación en tu historial: el plan la introduce desde ya, '
                        'por ser la disciplina más técnica del 70.3.')
         if meta.get('n_fuerza'):
-            st.caption(f"💪 Incluye **{meta['n_fuerza']} sesión(es) de fuerza** (piernas y core) y "
+            _det_sem.caption(f"💪 Incluye **{meta['n_fuerza']} sesión(es) de fuerza** (piernas y core) y "
                        f"**desnivel prescrito** (D+ ~{meta['dplus_bike']} m en la bici y "
                        f"~{meta['dplus_run']} m en la tirada larga): la fuerza mejora economía y "
                        f"previene lesiones, y el trabajo en cuesta/bajada añade potencia y tolerancia "
                        f"muscular, pilares de un 70.3.")
-        _hoy = _sesion_de_hoy(plan)
-        if _hoy is not None:
-            st.markdown('**🎯 Tu entrenamiento de hoy**')
-            _render_sesion(_hoy, recalc_hoy, hoy=True)
         # Resumen de la semana ARRIBA, antes del detalle día a día
         ses_n = sum(1 for s in plan if s['deporte'] not in ('Descanso', 'Movilidad'))
         vol = sum(s['dur_min'] for s in plan)
@@ -2477,9 +2560,7 @@ with tab_semana:
                                        ('Ciclismo', f"{km_cic:.0f} km"),
                                        ('Carrera', f"{km_car:.1f} km")]):
             col.metric(lab, val)
-        st.caption('Tu semana completa, día a día:')
-        for s in plan:
-            _render_sesion(s, recalc_hoy)
+        _render_semana(plan, recalc_hoy)
 
     # ---------------- ¿Por qué este plan? ----------------
     st.subheader(t('h_porque'))
