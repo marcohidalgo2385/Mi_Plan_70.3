@@ -95,6 +95,55 @@ st.markdown("""
   .preview {font-size:.78rem; font-weight:700; letter-spacing:1.5px; color:#9aa3ad;
             text-transform:uppercase; margin:.3rem 0 -.3rem;}
 
+  /* Frase del día: el «chute de energía» diario */
+  .hero {position:relative; overflow:hidden; border-radius:18px; padding:18px 24px 16px;
+         background:linear-gradient(115deg,#ff4e50 0%,#ff7a3d 45%,#ffb347 100%); color:#fff;
+         box-shadow:0 10px 26px rgba(255,90,60,.30); animation:heroIn .7s ease-out;}
+  .hero::before {content:"“"; position:absolute; right:22px; top:-34px; font-size:10rem;
+                 font-family:Georgia,serif; color:rgba(255,255,255,.20); line-height:1;}
+  .hero::after {content:""; position:absolute; width:240px; height:240px; border-radius:50%;
+                right:-70px; bottom:-130px; background:rgba(255,255,255,.13);}
+  .hero-eyebrow {font-size:.74rem; font-weight:800; letter-spacing:1.6px; text-transform:uppercase;
+                 opacity:.95; position:relative; z-index:1;}
+  .hero-q {font-size:clamp(1.3rem,2.7vw,1.85rem); font-weight:800; line-height:1.22; margin:6px 0 10px;
+           max-width:88%; text-shadow:0 2px 6px rgba(120,30,0,.18); position:relative; z-index:1;}
+  .hero-by {display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-weight:800;
+            font-size:.95rem; position:relative; z-index:1;}
+  .hero-by span {background:rgba(255,255,255,.24); border-radius:999px; padding:3px 11px;
+                 font-size:.8rem; font-weight:700;}
+  @keyframes heroIn {from {opacity:0; transform:translateY(8px);} to {opacity:1; transform:none;}}
+
+  /* Tu camino al 70.3 */
+  .camino {background:#fff; border:1px solid #e2e8ee; border-radius:16px; padding:14px 18px 12px;
+           box-shadow:0 2px 12px rgba(11,42,74,.07);}
+  .camino-head {display:flex; justify-content:space-between; align-items:flex-end; gap:12px;
+                flex-wrap:wrap;}
+  .camino .eyebrow {font-size:.72rem; font-weight:800; letter-spacing:2px; color:#1d6fa5;}
+  .camino .big {font-size:1.45rem; font-weight:800; color:#16202b; line-height:1.2;}
+  .camino .big span {font-size:1rem; color:#5b6670; font-weight:600;}
+  .camino .cuenta {display:flex; align-items:center; gap:9px; background:#0B2A4A; color:#fff;
+                   border-radius:12px; padding:6px 13px;}
+  .camino .cuenta .num {font-size:1.7rem; font-weight:800; color:#FFB38F; line-height:1;}
+  .camino .cuenta .lab {font-size:.72rem; line-height:1.25; opacity:.92;}
+  .track {position:relative; display:flex; gap:4px; height:36px; margin-top:22px;}
+  .track .seg {position:relative; border-radius:9px; overflow:hidden; min-width:30px; flex-basis:0;}
+  .track .seg .fill {position:absolute; top:0; bottom:0; left:0;}
+  .track .seg b {position:relative; z-index:1; display:flex; height:100%; align-items:center;
+                 justify-content:center; font-size:.8rem; white-space:nowrap; overflow:hidden;
+                 text-overflow:ellipsis; padding:0 4px; text-shadow:0 1px 2px rgba(0,0,0,.15);}
+  .track .seg b.sombra {text-shadow:0 0 4px #fff, 0 0 8px #fff;}
+  .track .seg.actual {outline:2.5px solid #0B2A4A; outline-offset:1px;}
+  .track .pin {position:absolute; top:-6px; bottom:-6px; width:3px; background:#0B2A4A;
+               border-radius:2px; transform:translateX(-50%); z-index:3;}
+  .track .pin i {position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
+                 margin-bottom:2px; background:#0B2A4A; color:#fff; font-style:normal;
+                 font-size:.62rem; font-weight:800; letter-spacing:1px; padding:1px 6px;
+                 border-radius:6px; white-space:nowrap;}
+  .weeks {display:flex; gap:4px; margin-top:5px;}
+  .weeks div {font-size:.7rem; color:#8a95a1; text-align:center; min-width:30px; flex-basis:0;
+              white-space:nowrap; overflow:hidden;}
+  .camino-foot {margin-top:8px; font-size:.88rem; color:#3a4650;}
+
   /* Sesión de hoy */
   .hoy-card {background:linear-gradient(135deg,#0B2A4A 0%,#13456F 60%,#1d6fa5 100%); color:#fff;
              border-radius:16px; padding:16px 20px; box-shadow:0 4px 16px rgba(11,42,74,.18);}
@@ -109,7 +158,8 @@ st.markdown("""
   .kpi {background:#fff; border:1px solid #e2e8ee; border-radius:12px; padding:10px 13px;}
   .kpi .lab {font-size:.75rem; color:#5b6670; text-transform:uppercase; letter-spacing:.5px; font-weight:600;}
   .kpi .val {font-size:clamp(1.05rem,2vw,1.35rem); font-weight:800; color:#16202b; line-height:1.15;
-            margin-top:2px; overflow-wrap:break-word;}
+            margin-top:2px; overflow-wrap:normal; hyphens:auto;}
+  .kpi .val.largo {font-size:clamp(.9rem,1.5vw,1.15rem); overflow-wrap:anywhere;}
   .kpi .sub {font-size:.78rem; color:#5b6670; margin-top:2px;}
   .kpi .bar {height:5px; background:#eef3f7; border-radius:4px; margin-top:6px; overflow:hidden;}
   .kpi .bar div {height:100%; background:#1d6fa5; border-radius:4px;}
@@ -134,6 +184,13 @@ st.markdown("""
   .ses.pasado {opacity:.5;}
   .sim-lab {font-size:.92rem; color:#16202b; line-height:1.35;}
   .sim-lab span {font-size:.82rem; color:#5b6670;}
+  .semana {align-items:start;}
+  .ses details.ayuda {margin-top:6px; font-size:.78rem;}
+  .ses details.ayuda summary {cursor:pointer; color:#1d6fa5; font-weight:700; list-style:none;}
+  .ses details.ayuda summary::-webkit-details-marker {display:none;}
+  .ses details.ayuda .ej {margin-top:6px; color:#3a4650; line-height:1.35;
+                          border-left:3px solid #d8e3ec; padding-left:7px;}
+  .ses details.ayuda a {color:#1d6fa5; font-weight:700; text-decoration:none; white-space:nowrap;}
   .ses .ajuste {margin-top:6px; font-size:.78rem; font-weight:700; color:#ba7517;}
 
   /* Chips de zonas */
@@ -236,6 +293,181 @@ GLOSARIO = {
     'taper': "Reducción del volumen (~50%) las 2-3 semanas previas a la carrera manteniendo toques de intensidad: la fatiga se va, la forma se queda.",
     'drafting': "Nadar a los pies de otro: legal en la natación y ahorra ~5% de energía.",
 }
+
+# ----------------------------------------------------------------------------
+# Biblioteca de ejercicios y términos de las sesiones: qué es, cómo se hace y el
+# error típico. Se detectan en el texto de cada sesión para explicarlos ahí mismo.
+# ----------------------------------------------------------------------------
+# (clave, emoji, título, patrones que lo detectan, qué es, cómo se hace, claves/errores, búsqueda de vídeo)
+EJERCICIOS = [
+    ('sentadilla', '🏋️', 'Sentadilla', [r'sentadilla'],
+     'Ejercicio básico de piernas: cuádriceps, glúteos y zona media. Es la base de la fuerza para pedalear y correr.',
+     'Pies a la anchura de los hombros y puntas un poco abiertas. Baja llevando la cadera atrás y abajo, como '
+     'para sentarte, con el pecho alto y la espalda recta, hasta que los muslos queden paralelos al suelo. '
+     'Sube empujando con todo el pie. Si empiezas, hazla con una mancuerna sujeta al pecho (sentadilla goblet).',
+     'Rodillas en la línea de los pies (que no se vayan hacia dentro) y talones siempre apoyados.',
+     'sentadilla goblet técnica'),
+    ('rumano', '🏋️', 'Peso muerto rumano', [r'peso muerto rumano'],
+     'Bisagra de cadera que fortalece isquiotibiales, glúteos y zona lumbar; protege la parte posterior del muslo al correr.',
+     'De pie, con la barra o dos mancuernas delante de los muslos y las rodillas algo flexionadas (no cambian '
+     'en todo el ejercicio). Lleva la cadera hacia atrás deslizando el peso pegado a las piernas hasta media '
+     'tibia o hasta notar tensión detrás del muslo. Vuelve empujando la cadera hacia delante y apretando glúteos.',
+     'La espalda no se redondea y no se convierte en sentadilla: se mueve la cadera, no las rodillas.',
+     'peso muerto rumano técnica'),
+    ('peso_muerto', '🏋️', 'Peso muerto', [r'peso muerto(?! rumano)'],
+     'Levantar una barra del suelo con piernas y cadera: trabaja toda la cadena posterior y la zona media.',
+     'Barra en el suelo sobre la mitad del pie. Agárrala a la anchura de los hombros, con la cadera más alta '
+     'que las rodillas, la espalda recta y el pecho alto. Sube empujando el suelo con las piernas y extendiendo '
+     'la cadera a la vez, con la barra pegada al cuerpo. Baja por el mismo camino.',
+     'Aprende la técnica con poco peso; la espalda nunca se redondea.',
+     'peso muerto técnica principiantes'),
+    ('zancada', '🦵', 'Zancadas', [r'zancada'],
+     'Ejercicio a una pierna: cuádriceps, glúteo y equilibrio, el mismo apoyo unilateral que al correr.',
+     'Da un paso largo hacia delante y baja hasta que las dos rodillas formen unos 90°, con la de atrás cerca '
+     'del suelo y el tronco erguido. Empuja con el talón de delante para volver. Alterna las piernas.',
+     'La rodilla de delante no se va hacia dentro; el paso, lo bastante largo para no cargarla.',
+     'zancadas técnica'),
+    ('gemelos', '🦶', 'Elevación de gemelos', [r'gemelo'],
+     'Fortalece gemelos y sóleo, y prepara el tendón de Aquiles para el impacto de la carrera.',
+     'De pie con la punta del pie sobre un escalón. Sube sobre las puntas lo más alto que puedas, aguanta 1 s '
+     'y baja despacio hasta que el talón quede por debajo del escalón. Haz una serie con la rodilla estirada y '
+     'otra con la rodilla algo flexionada.',
+     'La bajada lenta (3 s) es la parte que más protege el tendón.',
+     'elevación de gemelos en escalón'),
+    ('prensa', '🏋️', 'Prensa de piernas', [r'prensa'],
+     'Máquina de empuje con las piernas: fuerza de cuádriceps y glúteos con la espalda apoyada.',
+     'Pies a la anchura de la cadera en el centro de la plataforma. Baja controlando hasta que la rodilla forme '
+     'unos 90° y empuja de nuevo sin bloquear del todo las rodillas.',
+     'La zona lumbar no se despega del respaldo al bajar.',
+     'prensa de piernas técnica'),
+    ('plancha', '🧱', 'Plancha', [r'plancha'],
+     'Ejercicio isométrico de zona media: mantiene el tronco estable cuando nadas, pedaleas o corres cansado.',
+     'Apoyado en los antebrazos y las puntas de los pies, con el cuerpo en línea recta de la cabeza a los '
+     'talones. Aprieta abdomen y glúteos y aguanta de 20 a 45 s. La plancha lateral se hace de costado, '
+     'apoyado en un antebrazo.',
+     'La cadera no cae ni sube: si se hunde, termina la serie.',
+     'plancha abdominal técnica'),
+    ('pallof', '🎗️', 'Pallof press', [r'pallof'],
+     'Ejercicio de zona media «anti-rotación»: enseña al tronco a no girar, lo que ahorra energía al correr y pedalear.',
+     'Ata una banda elástica (o usa una polea) a la altura del pecho, a tu lado. Sujeta el asa con las dos '
+     'manos pegada al esternón y sepárate un paso para que la banda tire. Estira los brazos al frente, aguanta '
+     '2 s sin dejar que el tronco gire hacia la banda y vuelve al pecho. De 8 a 12 repeticiones por lado.',
+     'Lo importante no es empujar, es que el tronco no se mueva: pies firmes y glúteos apretados.',
+     'pallof press banda elástica'),
+    ('anti_rotacion', '🎗️', 'Core anti-rotación', [r'anti-rotaci'],
+     'Ejercicios de zona media que entrenan a resistir el giro del tronco, como el pallof press o la plancha.',
+     'Elige uno o dos: pallof press, plancha, plancha lateral o «bird-dog» (a cuatro patas, estira a la vez el '
+     'brazo y la pierna contrarios sin mover la espalda).',
+     'Movimientos lentos y controlados; calidad antes que repeticiones.',
+     'ejercicios core antirotación'),
+    ('puente', '🍑', 'Puente de glúteo', [r'puente de gl'],
+     'Activa los glúteos, que estabilizan la cadera en cada zancada y en el pedaleo.',
+     'Tumbado boca arriba, rodillas flexionadas y pies apoyados. Eleva la cadera apretando los glúteos hasta '
+     'alinear rodillas, cadera y hombros; aguanta 2 s y baja despacio. Para progresar, hazlo a una pierna.',
+     'Empuja con los talones y no arquees la zona lumbar al subir.',
+     'puente de glúteo técnica'),
+    ('pliometria', '⚡', 'Saltos explosivos (pliometría)', [r'salto', r'pliometr', r'explosiv'],
+     'Saltos cortos y rápidos que mejoran la «reactividad» del músculo y del tendón: más economía de carrera.',
+     'Sentadilla con salto, saltos a un cajón bajo o saltitos de tobillo. Despega lo más rápido posible y '
+     'aterriza suave, con las rodillas alineadas. Pocas repeticiones (3-6) con descanso completo entre series.',
+     'Busca calidad y rapidez, no cansancio. Si aterrizas «pesado», para.',
+     'pliometría corredores principiantes'),
+    ('movilidad', '🧘', 'Movilidad de cadera y tobillo', [r'movilidad'],
+     'Ejercicios suaves de rango de movimiento que sueltan la cadera y el tobillo después de muchas horas de bici y carrera.',
+     'Círculos de cadera, estiramiento del psoas en posición de zancada y «rodilla a la pared» para el tobillo '
+     '(con el pie a un palmo de la pared, lleva la rodilla a tocarla sin levantar el talón). De 5 a 10 min.',
+     'Sin rebotes ni dolor: el estiramiento se nota, pero no duele.',
+     'movilidad cadera tobillo corredores'),
+    ('bilateral', '🏊', 'Respiración bilateral', [r'bilateral'],
+     'Respirar alternando los dos lados, normalmente cada 3 brazadas.',
+     'Saca la boca de lado al final de la brazada, con media cara dentro del agua, y suelta el aire por la '
+     'nariz mientras tienes la cara sumergida. Respira a un lado, cuenta tres brazadas y respira al otro.',
+     'Equilibra la brazada, ayuda a nadar recto y en el agua abierta te deja respirar por el lado sin olas ni sol.',
+     'respiración bilateral crol'),
+    ('tecnica_nado', '🏊', 'Técnica de brazada y patada', [r'técnica de brazada', r'brazada y pies'],
+     'Ejercicios técnicos («drills») que corrigen un solo detalle cada vez.',
+     'Algunos ejemplos en tramos de 25-50 m: brazada a un brazo; «catch-up» (una mano espera a la otra delante '
+     'antes de tirar); «dedos arrastrando» (roza el agua con los dedos al recobrar, con el codo alto) y patada '
+     'con tabla. Nada despacio y piensa solo en el detalle del ejercicio.',
+     'Patada corta desde la cadera, no desde la rodilla.',
+     'ejercicios técnica crol triatlón'),
+    ('series', '🔁', 'Series', [r'\d+x\d+', r'series'],
+     'Repeticiones de un esfuerzo con recuperación entre ellas: acumulas más tiempo a intensidad alta del que aguantarías seguido.',
+     'Calienta 10-15 min suave. Haz cada repetición al ritmo o la zona indicados (por ejemplo, 5x4 min en Z4 = '
+     'cinco veces cuatro minutos) y recupera trotando, pedaleando o nadando suave el tiempo indicado. Termina '
+     'con 10 min suaves.',
+     'Todas las repeticiones al mismo ritmo: si la última sale mucho peor, saliste demasiado rápido.',
+     'entrenamiento por series zonas'),
+    ('brick', '🔗', 'Brick (bici + carrera)', [r'brick'],
+     GLOSARIO['brick'],
+     'Termina la bici, cambia de calzado en menos de 2-3 min (como en la T2) y sal a correr al ritmo indicado. '
+     'Los primeros minutos notarás las piernas pesadas: acorta la zancada, sube la cadencia y deja que la FC se asiente.',
+     'Prepara la ropa y las zapatillas de correr antes de salir en bici.',
+     'entrenamiento brick triatlón'),
+    ('cadencia', '🔄', 'Cadencia', [r'cadencia', r'rpm'],
+     GLOSARIO['cadencia'],
+     'Cuenta las pedaladas de una pierna en 30 s y multiplica por dos, o míralo en el ciclocomputador. Usa '
+     'desarrollos más ligeros si vas por debajo del objetivo.',
+     'Una cadencia alta cansa menos las piernas para la carrera posterior.',
+     'cadencia pedaleo triatlón'),
+    ('bajadas', '⛰️', 'Bajadas controladas', [r'bajada', r'descenso'],
+     GLOSARIO['excéntrico / bajadas'],
+     'Corre las bajadas con pasos cortos y rápidos, el tronco ligeramente adelantado y el pie apoyando bajo el '
+     'cuerpo, sin frenar con el talón. Empieza con bajadas suaves y pocas.',
+     'Las primeras veces habrá agujetas: es el músculo adaptándose.',
+     'técnica correr cuesta abajo'),
+    ('desnivel', '⛰️', 'Desnivel positivo (D+)', [r'd\+', r'desnivel'],
+     GLOSARIO['D+'],
+     'Elige una ruta con subidas; tu reloj o Strava muestran los metros acumulados. Sube sentado y a tu zona, '
+     'sin cebarte.',
+     'Mejor varias subidas moderadas que una sola muy dura.',
+     'entrenar en cuestas ciclismo'),
+    ('z2', '💚', 'Zona 2 (Z2)', [r'\bz2\b', r'z1-z2'],
+     'Intensidad aeróbica suave, la base del triatlón de larga distancia: puedes mantener una conversación.',
+     'Mantén la FC dentro del rango que te indica la sesión. Si sube, baja el ritmo aunque te parezca muy lento.',
+     'El error más común es ir demasiado rápido en los días suaves.',
+     'entrenar zona 2 frecuencia cardiaca'),
+]
+
+
+def ayudas_sesion(texto):
+    """Ejercicios y términos que aparecen en el texto de una sesión (sin repetir)."""
+    s = str(texto).lower()
+    vistos, out = set(), []
+    for e in EJERCICIOS:
+        if e[0] in vistos:
+            continue
+        if any(re.search(p, s) for p in e[3]):
+            vistos.add(e[0])
+            out.append(e)
+    # El peso muerto rumano incluye las palabras «peso muerto»: basta con explicar el rumano
+    return out
+
+
+def url_video(busqueda):
+    from urllib.parse import quote_plus
+    return 'https://www.youtube.com/results?search_query=' + quote_plus(busqueda)
+
+
+def md_ejercicio(e):
+    _k, emo, tit, _p, que, como, clave, vid = e
+    return (f"**{emo} {tit}** — {que}\n\n"
+            f"**Cómo se hace:** {como}\n\n"
+            f"**Clave:** {clave} · [▶ Ver vídeos]({url_video(vid)})")
+
+
+def html_ayudas(texto, max_items=4):
+    """Bloque plegable «¿Cómo se hace?» para las tarjetas de la semana."""
+    items = ayudas_sesion(texto)[:max_items]
+    if not items:
+        return ''
+    cuerpo = ''.join(
+        f'<div class="ej"><b>{emo} {tit}</b> — {que} <br><i>Cómo:</i> {como} '
+        f'<a href="{url_video(vid)}" target="_blank">▶ vídeo</a></div>'
+        for _k, emo, tit, _p, que, como, _c, vid in items)
+    return (f'<details class="ayuda"><summary>📖 Cómo se hace ({len(items)})</summary>'
+            f'{cuerpo}</details>')
+
 
 # ----------------------------------------------------------------------------
 # Utilidades de formato
@@ -420,6 +652,7 @@ def generar_explicacion_plan(atleta, perfil_tipo, fase, semanas_restantes, ctl_a
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=86400)
 def generar_frase_dia(nombre, fase, semilla, fallback):
     """Frase motivadora del día, personalizada con Gemini (una por día).
     Si Gemini no está disponible, usa la frase de respaldo (lista curada)."""
@@ -498,9 +731,9 @@ def datos_demo():
 def eventos_demo(sem_tot):
     """Dos incidencias guionizadas en la demo para ver reaccionar a las reglas de la
     Tabla 7: una semana sin entrenar (viaje) y otra de sobrecarga."""
-    viaje = max(int(round(sem_tot * 0.25)), 2)
-    sobrecarga = max(int(round(sem_tot * 0.42)), viaje + 2)
-    return {viaje: 'viaje', sobrecarga: 'sobrecarga'}
+    sobrecarga = max(int(round(sem_tot * 0.42)), 2)
+    viaje = max(int(round(sem_tot * 0.67)), sobrecarga + 3)
+    return {sobrecarga: 'sobrecarga', viaje: 'viaje'}
 
 
 def acts_demo_progresivo(per, sexo='M', fecha_inicio=None):
@@ -546,11 +779,11 @@ def acts_demo_progresivo(per, sexo='M', fecha_inicio=None):
                       'max_hr': rng.normal(hr_max, 3),
                       'moving_time': max(minutos * rng.uniform(0.85, 1.15), 15)})
 
-    # Historial previo: 8 semanas, 4 sesiones suaves por semana
+    # Historial previo: 8 semanas, 4 sesiones suaves por semana (~2,5 h, como la semana 1)
     for w in range(-8, 0):
         lunes = ini + pd.Timedelta(days=w * 7)
-        for dia, sport, mins in ((1, 'RUNNING', 45), (3, 'SWIMMING', 40),
-                                 (5, 'CYCLING', 75), (6, 'RUNNING', 55)):
+        for dia, sport, mins in ((1, 'RUNNING', 30), (3, 'SWIMMING', 25),
+                                 (5, 'CYCLING', 60), (6, 'RUNNING', 35)):
             f = lunes + pd.Timedelta(days=dia)
             if f <= hoy_:
                 _sesion(f, sport, mins, 0.0)
@@ -600,11 +833,11 @@ def acts_demo_progresivo(per, sexo='M', fecha_inicio=None):
             intensa = True
         for dia, sport, pico in catalogo[:n_ses]:
             f = lunes + pd.Timedelta(days=dia)
-            if eventos_demo(sem_tot).get(sem + 1) == 'viaje' and dia >= 4:
-                continue                              # el viaje empieza el viernes anterior
+            if eventos_demo(sem_tot).get(sem + 1) == 'viaje' and dia >= 3:
+                continue                              # el viaje empieza el jueves anterior
             if f > hoy_ or (rng.random() < 0.10 and not evento):      # futuro o sesión no realizada
                 continue
-            _sesion(f, sport, max(pico * vol, 20), prog,
+            _sesion(f, sport, max(pico * vol, 40 if dia == 6 else 20), prog,
                     intensa and (dia in (1, 2) or evento == 'sobrecarga'))
     if not filas:
         return pd.DataFrame(columns=['athlete', 'sport', 'date', 'avg_speed_kmh',
@@ -1818,6 +2051,103 @@ NOMBRE_FASE = {'BASE': 'Base', 'CONSTRUCCION': 'Construcción', 'PICO': 'Pico',
                'TAPERING': 'Taper', 'COMPETENCIA': '70.3'}
 
 
+MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+            'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+
+def _aclarar(hex_color, f=0.82):
+    """Mezcla un color con blanco (f = proporción de blanco), para los tramos futuros."""
+    h = hex_color.lstrip('#')
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return '#{:02x}{:02x}{:02x}'.format(*(int(c + (255 - c) * f) for c in (r, g, b)))
+
+
+def html_frase_dia(frase, nombre, per, fh):
+    """Banner de la frase del día: grande, cálido y con la fecha, para empezar con energía."""
+    frase = str(frase).strip()
+    frase = frase[:1].upper() + frase[1:]
+    if frase[-1:] not in '.!?':
+        frase += '.'
+    fecha_txt = f"{DIAS_ES[fh.dayofweek]} {fh.day} de {MESES_ES[fh.month - 1]}"
+    return (
+        '<div class="hero">'
+        f'<div class="hero-eyebrow">👋 ¡Hola, {nombre}! · Tu frase de hoy · {fecha_txt}</div>'
+        f'<div class="hero-q">{frase}</div>'
+        '<div class="hero-by">💪 ¡A por ello!'
+        f"<span>Semana {per['semana_actual']} de {per['semanas_totales']}</span>"
+        f"<span>{per['semanas_restantes']} semanas para tu 70.3</span></div>"
+        '</div>')
+
+
+def html_camino(per, fecha_inicio, fecha_comp, fh):
+    """Línea de tiempo del macrociclo: tramos proporcionales a sus semanas, lo recorrido
+    en color, la posición de hoy y la cuenta atrás hasta la prueba."""
+    sem_tot = max(int(per['semanas_totales']), 1)
+    sem_act = int(per['semana_actual'])
+    # Mismo criterio que calcular_fase (semanas restantes), alineado con la semana actual
+    desfase = (sem_tot - sem_act + 1) - int(per['semanas_restantes'])
+
+    def fase_sem(s):
+        r = sem_tot - s + 1 - desfase
+        return ('COMPETENCIA' if r <= 1 else 'TAPERING' if r <= 3 else 'PICO' if r <= 6
+                else 'CONSTRUCCION' if r <= 12 else 'BASE')
+
+    tramos = []
+    for s in range(1, sem_tot + 1):
+        f = fase_sem(s)
+        if tramos and tramos[-1][0] == f:
+            tramos[-1][2] = s
+        else:
+            tramos.append([f, s, s])
+    info = {n: (c, d) for n, c, _ca, d in FASES_INFO}
+    ini = pd.Timestamp(fecha_inicio).normalize()
+    dias_plan = max((pd.Timestamp(fecha_comp).normalize() - ini).days, 1)
+    pos = min(max((fh - ini).days / 7.0, 0.0), float(sem_tot))       # en semanas
+    pos_pct = pos / sem_tot * 100
+
+    segs, etiquetas = '', ''
+    for f, a, b in tramos:
+        nom = NOMBRE_FASE.get(f, f)
+        color, _d = info.get(nom, ('#1d6fa5', ''))
+        n = b - a + 1
+        lleno = min(max((pos - (a - 1)) / n, 0.0), 1.0) * 100
+        actual = f == per['fase']
+        clase = 'seg actual' if actual else ('seg hecho' if lleno >= 100 else 'seg')
+        rotulo = '🏁' if f == 'COMPETENCIA' else nom
+        segs += (f'<div class="{clase}" style="flex:{n};background:{_aclarar(color)}">'
+                 f'<div class="fill" style="width:{lleno:.1f}%;background:{color}"></div>'
+                 f'<b{" class=sombra" if actual else ""} style="color:'
+                 f'{"#fff" if lleno >= 100 else ("#0B2A4A" if actual else color)};'
+                 f'{("justify-content:" + ("flex-end" if lleno < 50 else "flex-start") + ";padding:0 12px") if actual else ""}">'
+                 f'{rotulo}</b></div>')
+        etiquetas += (f'<div style="flex:{n}">{"s" + str(a) if a == b else f"s{a}–{b}"}</div>')
+
+    # Fase actual y la siguiente
+    idx = next((i for i, t in enumerate(tramos) if t[0] == per['fase']), 0)
+    nom_act = NOMBRE_FASE.get(per['fase'], per['fase'])
+    color_act, desc_act = info.get(nom_act, ('#1d6fa5', ''))
+    siguiente = ''
+    if idx + 1 < len(tramos):
+        f2, a2, _b2 = tramos[idx + 1]
+        en = a2 - sem_act
+        ini2 = ini + pd.Timedelta(days=(a2 - 1) * 7)
+        siguiente = (f' · Siguiente: <b>{NOMBRE_FASE.get(f2, f2)}</b> en {en} '
+                     f'semana{"s" if en != 1 else ""} ({ini2:%d/%m})')
+    dias_carrera = max((pd.Timestamp(fecha_comp).normalize() - fh).days, 0)
+    return (
+        '<div class="camino">'
+        '<div class="camino-head"><div>'
+        '<div class="eyebrow">TU CAMINO AL 70.3</div>'
+        f'<div class="big">Semana {sem_act} <span>de {sem_tot}</span> · '
+        f'<b style="color:{color_act}">{nom_act}</b></div></div>'
+        f'<div class="cuenta"><div class="num">{dias_carrera}</div>'
+        f'<div class="lab">días para<br>tu 70.3 · {pd.Timestamp(fecha_comp):%d/%m/%Y}</div></div></div>'
+        f'<div class="track">{segs}<div class="pin" style="left:{pos_pct:.1f}%"><i>HOY</i></div></div>'
+        f'<div class="weeks">{etiquetas}</div>'
+        f'<div class="camino-foot"><b style="color:{color_act}">● {nom_act}:</b> {desc_act}{siguiente}</div>'
+        '</div>')
+
+
 def grafico_fases(fase_actual, sem_actual, sem_tot):
     """Barra de macrociclo cuyos tramos respetan los MISMOS umbrales por semanas
     que definen la fase (base >12 sem, construcción 7-12, pico 4-6, taper 2-3,
@@ -1885,7 +2215,9 @@ _hdr_l, _hdr_r = st.columns([5, 1.1], vertical_alignment='center')
 with _hdr_r:
     idioma = IDIOMAS[st.selectbox('Idioma / Language', list(IDIOMAS.keys()), key='idioma_sel',
                                   label_visibility='collapsed')]
-_hdr_slot = _hdr_l.empty()   # se completa con la frase del día cuando se conoce la fase
+_hdr_l.markdown('<div class="brand"><span class="dot"></span>Mi plan 70.3</div>',
+                unsafe_allow_html=True)
+_hero_slot = st.empty()      # frase del día: se completa cuando se conoce la fase
 
 nombre = None
 if 'strava_token' in st.session_state:
@@ -2104,10 +2436,7 @@ per = calcular_fase(fecha_comp, perfil_tipo, fecha_inicio, semana_sim)
 
 # --- Cabecera completa: saludo y frase del día (Gemini si está disponible) ---
 _frase = generar_frase_dia(nombre, per['fase'], fecha_hoy().toordinal(), frase_base)
-_hdr_slot.markdown(
-    '<div class="brand"><span class="dot"></span>Mi plan 70.3</div>'
-    f'<div class="hola">{t("hola", n=nombre)}</div>'
-    f'<div class="frase">“{_frase}”</div>', unsafe_allow_html=True)
+_hero_slot.markdown(html_frase_dia(_frase, nombre, per, fecha_hoy()), unsafe_allow_html=True)
 
 if _config_ok:
     _chips = [('🧭', t('nuevo') if perfil_tipo == 'nuevo' else t('experto')),
@@ -2214,11 +2543,13 @@ if _demo_activo and _sim_hi > _sim_lo:
         st.slider('Fecha simulada', min_value=_sim_lo, max_value=_sim_hi, key='fecha_sim',
                   format='DD/MM/YYYY', label_visibility='collapsed')
         _ev = {v: k for k, v in eventos_demo(per['semanas_totales']).items()}
-        st.caption(f"📌 Guion de la demo: en la semana {_ev['viaje']} el deportista no entrena (viaje) "
-                   f"y en la {_ev['sobrecarga']} entrena de más (sobrecarga). Avanza a la semana "
-                   "siguiente de cada una para ver cómo el tipo de semana y el plan responden. "
+        st.caption(f"📌 Guion de la demo: en la semana {_ev['sobrecarga']} el deportista entrena de más "
+                   f"(sobrecarga) y en la {_ev['viaje']} no entrena (viaje). Avanza a las semanas "
+                   "siguientes y mira cómo cambian la frescura (TSB), el tipo de semana y el plan. "
                    "Cada lunes se decide la semana con la carga de la anterior; el registro matinal "
                    "ajusta el día.")
+
+st.markdown(html_camino(per, fecha_inicio, fecha_comp, fecha_hoy()), unsafe_allow_html=True)
 
 _plan_hoy_card, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
 _dia_hoy = DIAS_ES[fecha_hoy().dayofweek]
@@ -2229,15 +2560,25 @@ with _col_hoy:
     if _ses_hoy_card:
         _emo = {'Natación': '🏊', 'Ciclismo': '🚴', 'Carrera': '🏃', 'Descanso': '😴',
                 'Movilidad': '🧘', 'Competencia': '🏁', 'Fuerza': '💪'}.get(_ses_hoy_card['deporte'], '•')
-        _meta_line = (f"{_ses_hoy_card['km']} km · {_ses_hoy_card['dur_min']} min"
+        _km_h = float(_ses_hoy_card.get('km') or 0)
+        _meta_line = (((f"{_km_h:g} km · " if _km_h else '') + f"{_ses_hoy_card['dur_min']} min")
                       if _ses_hoy_card.get('dur_min') else 'Día de descanso / recuperación')
+        _tipo_h = str(_ses_hoy_card['tipo'])
+        _tit_h = (_tipo_h[:1].upper() + _tipo_h[1:]
+                  if _tipo_h.lower().startswith(str(_ses_hoy_card['deporte']).lower())
+                  else f"{_ses_hoy_card['deporte']} — {_tipo_h}")
         st.markdown(
             '<div class="hoy-card">'
             f'<div class="eyebrow">TU SESIÓN DE HOY · {_dia_hoy.upper()}</div>'
-            f'<div class="titulo">{_emo} {_ses_hoy_card["deporte"]} — {_ses_hoy_card["tipo"]}</div>'
+            f'<div class="titulo">{_emo} {_tit_h}</div>'
             f'<div class="meta">{_meta_line}</div>'
             f'<div class="det">{md_a_html(_ses_hoy_card["detalle"])}</div>'
             '</div>', unsafe_allow_html=True)
+        _ayudas_hoy = ayudas_sesion(f"{_ses_hoy_card['tipo']} {_ses_hoy_card['detalle']}")
+        if _ayudas_hoy:
+            with st.expander(f"📖 ¿Cómo se hace? Ejercicios y términos de hoy ({len(_ayudas_hoy)})"):
+                for _e in _ayudas_hoy:
+                    st.markdown(md_ejercicio(_e))
 
     # Registro matinal: plegado para no ocupar espacio; al recalcular, aparece el ajuste
     bb_hoy = float(st.session_state.get('bb', 78))
@@ -2270,18 +2611,26 @@ with _col_kpi:
     _tipo_col = {'DESCANSO': '#a32d2d', 'REGENERATIVO': '#ba7517',
                  'MANTENIMIENTO': '#1d6fa5', 'CARGA': '#1d9e75'}.get(tipo_semana, '#1d6fa5')
     _mot = str(motivo_semana).replace('"', "'")
+    _ses_r = sum(1 for s in _plan_hoy_card if s['deporte'] in ('Natación', 'Ciclismo', 'Carrera', 'Competencia'))
+    _ses_f = sum(1 for s in _plan_hoy_card if s['deporte'] == 'Fuerza')
+    _vol_sem = sum(int(s.get('dur_min') or 0) for s in _plan_hoy_card)
+    _tsb7 = (float(_fit_dec['TSB'].dropna().tail(7).mean())
+             if (not _fit_dec.empty and 'TSB' in _fit_dec.columns) else float('nan'))
+    _tsb_txt = ('descansado' if _tsb7 > 5 else 'equilibrio' if _tsb7 >= -10 else
+                'cargado' if _tsb7 >= -25 else 'muy cargado') if not np.isnan(_tsb7) else ''
+    _glos = GLOSARIO['CTL / ATL / TSB'].replace('"', "'")
     _kpis_html = [
-        ('Fase', NOMBRE_FASE.get(per['fase'], per['fase']),
-         f"semana {per['semana_actual']} de {per['semanas_totales']}"
-         f'<div class="bar"><div style="width:{_prog}%"></div></div>', '', ''),
-        ('Tu 70.3', f"{per['semanas_restantes']} sem", f'{fecha_comp:%d/%m/%Y}', '', ''),
-        ('Semana de', nombre_semana, 'según tu frescura (TSB)', _tipo_col, _mot),
+        ('Semana de', nombre_semana, 'decidida por tu frescura', _tipo_col, _mot),
+        ('Esta semana', f"{_ses_r} + {_ses_f} 💪" if _ses_f else f"{_ses_r}",
+         f'sesiones · {min2t(_vol_sem)} h', '', 'Sesiones de natación, bici y carrera + fuerza'),
         ('Forma (CTL)', '—' if np.isnan(_ctl_now) else f'{_ctl_now:.0f}',
-         f'objetivo {CTL_OBJETIVO_70_3}', '', GLOSARIO['CTL / ATL / TSB'].replace('"', "'")),
+         f'objetivo {CTL_OBJETIVO_70_3}', '', _glos),
+        ('Frescura (TSB)', '—' if np.isnan(_tsb7) else f'{_tsb7:+.0f}',
+         f'media de 7 días · {_tsb_txt}', '', _glos),
     ]
     st.markdown('<div class="kpis">' + ''.join(
         f'<div class="kpi" title="{tip}"><div class="lab">{lab}</div>'
-        f'<div class="val"{f" style=color:{col}" if col else ""}>{val}</div>'
+        f'<div class="val{" largo" if len(str(val)) > 10 else ""}"{f" style=color:{col}" if col else ""}>{val}</div>'
         f'<div class="sub">{sub}</div></div>'
         for lab, val, sub, col, tip in _kpis_html) + '</div>', unsafe_allow_html=True)
 
@@ -2481,42 +2830,7 @@ with tab_forma:
         st.caption('Sin datos de fitness: ejecuta el notebook para generar salidas/.')
         ctl = 50.0
 
-    st.subheader(t('h_rumbo'))
-    # Barra de macrociclo segmentada (HTML): fase hecha · fase actual · fases futuras.
-    _orden_fases = ['Base', 'Construcción', 'Pico', 'Taper', '70.3']
-    _fase_nom = NOMBRE_FASE.get(per['fase'], 'Base')
-    _idx_fase = _orden_fases.index(_fase_nom) if _fase_nom in _orden_fases else 0
-    _segs = ''
-    for _i, _nom in enumerate(_orden_fases):
-        if _i < _idx_fase:
-            _bg, _col, _w = '#E6F1FB', '#0c447c', '500'        # ya recorrida
-        elif _i == _idx_fase:
-            _bg, _col, _w = '#1d6fa5', '#ffffff', '700'        # fase actual
-        else:
-            _bg, _col, _w = '#eef3f7', '#5b6670', '500'        # por venir
-        _segs += (f'<div style="flex:1;text-align:center;font-size:12px;font-weight:{_w};'
-                  f'color:{_col};background:{_bg};border-radius:6px;padding:9px 2px;">{_nom}</div>')
-    # Barra fina de progreso por semanas dentro del plan
-    _prog_pct = int(min(max(per['semana_actual'] / max(per['semanas_totales'], 1), 0), 1) * 100)
-    st.markdown(
-        f'<div style="display:flex;gap:5px;margin:2px 0 8px;">{_segs}</div>'
-        '<div style="height:7px;background:#eef3f7;border-radius:6px;overflow:hidden;">'
-        f'<div style="height:100%;width:{_prog_pct}%;background:#1d6fa5;border-radius:6px;"></div>'
-        '</div>', unsafe_allow_html=True)
-    _sim_txt = (' · 🎛️ fecha simulada en la demo' if fecha_hoy().date() != date.today()
-                else ' · la semana avanza sola con el calendario desde tu fecha de inicio')
-    st.caption(f"📅 Estás en la **semana {per['semana_actual']} de {per['semanas_totales']}** "
-               f"del plan · faltan {per['semanas_restantes']} semanas para tu 70.3 "
-               f"({fecha_comp:%d %b %Y}){_sim_txt}.")
-    _desc_fase = next((d for n, _c, _ca, d in FASES_INFO if n == NOMBRE_FASE.get(per['fase'], '')), '')
-    st.markdown(
-        f"**Fase actual: {NOMBRE_FASE.get(per['fase'], per['fase'])}** — {_desc_fase}.  \n"
-        "Carga característica de cada fase: "
-        "🔵 **Base** volumen alto, intensidad baja · "
-        "🟢 **Construcción** sube la intensidad · "
-        "🔴 **Pico** carga máxima · "
-        "🟠 **Taper** descarga para llegar fresco · "
-        "🟣 **70.3** carrera.")
+    st.subheader('🎯 Tu forma frente al objetivo')
     ramp = (CTL_OBJETIVO_70_3 - ctl) / max(per['semanas_restantes'], 1)
     if per['fase'] in ('TAPERING', 'COMPETENCIA'):
         progreso = 'fase final: mantener, no construir'
@@ -2528,9 +2842,10 @@ with tab_forma:
         progreso = 'justo: evitar semanas perdidas'
     else:
         progreso = 'riesgo: forma lejos del objetivo'
-    st.caption(f"CTL {ctl:.0f} → objetivo {CTL_OBJETIVO_70_3} · rampa necesaria "
-               f"{max(ramp, 0):+.1f}/semana · **{progreso}** · faltan "
-               f"{per['semanas_restantes']} semanas ({fecha_comp:%d %b %Y})")
+    _rampa_txt = ('' if per['fase'] in ('TAPERING', 'COMPETENCIA')
+                  else f" · rampa necesaria {max(ramp, 0):+.1f}/semana")
+    st.caption(f"CTL {ctl:.0f} → objetivo {CTL_OBJETIVO_70_3}{_rampa_txt} · **{progreso}** · "
+               f"faltan {per['semanas_restantes']} semanas ({fecha_comp:%d/%m/%Y})")
 
     # ---------------- Progreso por disciplina (interactivo) ----------------
     _idx_prog, _kpis = progreso_semanal(acts, fecha_inicio)
@@ -2640,7 +2955,8 @@ with tab_semana:
                 f'<div class="dep">{EMOJI_DEP.get(dep, "⚪")} {dep}</div>'
                 f'<div class="tipo">{s["tipo"]}</div>'
                 + (f'<div class="meta">{meta}</div>' if meta else '')
-                + f'<div class="det">{md_a_html(s["detalle"])}</div>{ajuste}</div>')
+                + f'<div class="det">{md_a_html(s["detalle"])}</div>'
+                + html_ayudas(f"{s['tipo']} {s['detalle']}") + f'{ajuste}</div>')
         st.markdown(f'<div class="semana">{tarjetas}</div>', unsafe_allow_html=True)
 
 
@@ -2767,6 +3083,10 @@ with tab_carrera:
 
 with tab_info:
     # ---------------- Glosario ----------------
+    with st.expander('📖 Ejercicios y técnica: cómo se hace cada uno', expanded=True):
+        _sel_ej = st.selectbox('Elige un ejercicio o término', [e[2] for e in EJERCICIOS],
+                               key='ej_sel')
+        st.markdown(md_ejercicio(next(e for e in EJERCICIOS if e[2] == _sel_ej)))
     with st.expander('ⓘ Para entender tu plan (glosario)'):
         for k, v in GLOSARIO.items():
             st.markdown(f'**{k}** — {v}')
