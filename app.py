@@ -131,6 +131,9 @@ st.markdown("""
   .ses .tipo {font-size:.85rem; color:#1d6fa5; font-weight:600;}
   .ses .meta {font-size:.8rem; color:#16202b; font-weight:700; margin-top:2px;}
   .ses .det {font-size:.8rem; color:#5b6670; line-height:1.35; margin-top:4px;}
+  .ses.pasado {opacity:.5;}
+  .sim-lab {font-size:.92rem; color:#16202b; line-height:1.35;}
+  .sim-lab span {font-size:.82rem; color:#5b6670;}
   .ses .ajuste {margin-top:6px; font-size:.78rem; font-weight:700; color:#ba7517;}
 
   /* Chips de zonas */
@@ -238,6 +241,14 @@ GLOSARIO = {
 # Utilidades de formato
 # ----------------------------------------------------------------------------
 ESTADO_PLAN_PATH = '.plan_estado.json'
+
+
+def fecha_hoy():
+    """Fecha de referencia del plan: la real o, en el modo demo, la fecha simulada."""
+    sim = st.session_state.get('fecha_sim')
+    if sim is not None:
+        return pd.Timestamp(sim).normalize()
+    return pd.Timestamp.today().normalize()
 
 
 def md_a_html(txt):
@@ -458,7 +469,7 @@ def datos_demo():
     perfil = pd.DataFrame([{'athlete': 'Demo', 'resting_hr': 52,
                             'pace_running_kmh': 10.5, 'pace_cycling_kmh': 24,
                             'pace_swimming_kmh': 2.8}])
-    fechas = pd.date_range(end=pd.Timestamp.today(), periods=120)
+    fechas = pd.date_range(end=fecha_hoy(), periods=120)
     rng = np.random.default_rng(7)
     fitness = pd.DataFrame({'athlete': 'Demo', 'date': fechas,
                             'CTL': np.linspace(35, 50, 120) + rng.normal(0, 1, 120),
@@ -467,7 +478,7 @@ def datos_demo():
     # Actividades con FECHA y las 3 disciplinas, con mejora gradual del ritmo
     # a lo largo de ~16 semanas (para ilustrar el progreso en el gráfico).
     filas = []
-    hoy = pd.Timestamp.today().normalize()
+    hoy = fecha_hoy()
     base = {'RUNNING': (9.6, 11.2, 0.35, 162, 186),
             'CYCLING': (23.0, 28.0, 0.9, 150, 178),
             'SWIMMING': (2.55, 2.95, 0.08, 150, 170)}  # (v_ini, v_fin, ruido, hr, hrmax)
@@ -484,37 +495,120 @@ def datos_demo():
     return perfil, fitness, acts
 
 
+def eventos_demo(sem_tot):
+    """Dos incidencias guionizadas en la demo para ver reaccionar a las reglas de la
+    Tabla 7: una semana sin entrenar (viaje) y otra de sobrecarga."""
+    viaje = max(int(round(sem_tot * 0.25)), 2)
+    sobrecarga = max(int(round(sem_tot * 0.42)), viaje + 2)
+    return {viaje: 'viaje', sobrecarga: 'sobrecarga'}
+
+
 def acts_demo_progresivo(per, sexo='M', fecha_inicio=None):
-    """Actividades de demostración que REFLEJAN las semanas ya transcurridas del
-    plan: a más semanas completadas, más actividades acumuladas y mayor mejora.
-    Las fechas se generan DESDE EL INICIO DEL PLAN hacia adelante (semana 1, 2, 3…),
-    para que coincidan con el filtro "solo desde el inicio" del gráfico de progreso.
-    Así evoluciona al avanzar (o simular) las semanas, igual que los datos reales."""
-    sem_act = int(per.get('semana_actual', 1))
+    """Actividades de demostración que siguen el propio plan hasta la fecha de hoy
+    (real o simulada en la demo).
+
+    - Ocho semanas previas al plan con 4 sesiones suaves por semana: es el historial
+      de partida, para que la CTL no arranque en cero.
+    - Desde el inicio, cada semana reproduce la estructura del motor: las mismas
+      sesiones de resistencia (de 3 a 6), con la rampa de volumen, las semanas de
+      descarga cada cuatro y la reducción del tapering. Se omite alguna sesión al azar
+      (adherencia del ~90 %), como ocurre con un deportista real.
+    - Dos incidencias (eventos_demo): una semana de viaje sin entrenar y otra de
+      sobrecarga, para que el tipo de semana cambie como lo haría en la realidad.
+    - Cada semana el deportista cumple el tipo de semana que el sistema decide el lunes
+      (en una semana de descanso no entrena; en mantenimiento repite el volumen).
+    - Las velocidades mejoran poco a poco con el avance del plan.
+    Así, al avanzar la fecha, la carga (CTL/ATL/TSB), el tipo de semana y el gráfico
+    de progreso evolucionan igual que lo harían con datos reales."""
+    hoy_ = fecha_hoy()
     sem_tot = max(int(per.get('semanas_totales', 24)), 1)
-    # Semanas transcurridas desde el inicio del plan: si empezaste hoy, apenas hay
-    # datos; el historial crece semana a semana (con datos reales pasaría igual).
-    n_weeks = min(max(sem_act, 1), 24)
+    nuevo = int(per.get('semanas_minimas', 24)) >= 24
     sx = 1.0 if sexo == 'M' else 0.93
     if fecha_inicio is not None:
         ini = pd.Timestamp(fecha_inicio).normalize()
     else:
-        ini = pd.Timestamp.today().normalize() - pd.Timedelta(days=(n_weeks - 1) * 7)
+        ini = hoy_ - pd.Timedelta(days=(int(per.get('semana_actual', 1)) - 1) * 7)
     rng = np.random.default_rng(7)
-    base = {'RUNNING': (9.4, 11.6, 0.30, 162, 186),
-            'CYCLING': (22.0, 29.5, 0.8, 150, 178),
-            'SWIMMING': (2.5, 3.05, 0.07, 150, 170)}   # (v_ini, v_fin, ruido, hr, hrmax)
+    vel = {'RUNNING': (9.4, 11.6, 0.30), 'CYCLING': (22.0, 29.5, 0.8),
+           'SWIMMING': (2.5, 3.05, 0.07)}            # (v_ini, v_fin, ruido) en km/h
+    hr_z2, hr_q, hr_max = 130, 152, 186
+
+    # Sesiones de referencia del motor: (día de la semana, deporte, minutos en el pico)
+    catalogo = [(5, 'CYCLING', 220), (3, 'SWIMMING', 55), (6, 'RUNNING', 120),
+                (1, 'RUNNING', 55), (2, 'CYCLING', 85), (4, 'SWIMMING', 45)]
     filas = []
-    for sport, (v0, v1, ns, hr, hrmax) in base.items():
-        for w in range(n_weeks):
-            frac = w / max(sem_tot - 1, 1)            # mejora proporcional al avance del plan
-            d_sem = ini + pd.Timedelta(days=w * 7)    # semana w DESDE el inicio
-            for _ in range(2):                        # ~2 sesiones/semana por disciplina
-                filas.append({'athlete': 'Demo', 'sport': sport,
-                              'date': d_sem + pd.Timedelta(days=int(rng.integers(0, 5))),
-                              'avg_speed_kmh': (v0 + (v1 - v0) * frac) * sx + rng.normal(0, ns),
-                              'avg_hr': rng.normal(hr, 5), 'max_hr': rng.normal(hrmax, 4),
-                              'moving_time': rng.normal(55, 12)})
+
+    def _sesion(fecha, sport, minutos, frac, intensa=False):
+        v0, v1, ns = vel[sport]
+        filas.append({'athlete': 'Demo', 'sport': sport, 'date': fecha,
+                      'avg_speed_kmh': (v0 + (v1 - v0) * frac) * sx + rng.normal(0, ns),
+                      'avg_hr': rng.normal(hr_q if intensa else hr_z2, 4),
+                      'max_hr': rng.normal(hr_max, 3),
+                      'moving_time': max(minutos * rng.uniform(0.85, 1.15), 15)})
+
+    # Historial previo: 8 semanas, 4 sesiones suaves por semana
+    for w in range(-8, 0):
+        lunes = ini + pd.Timedelta(days=w * 7)
+        for dia, sport, mins in ((1, 'RUNNING', 45), (3, 'SWIMMING', 40),
+                                 (5, 'CYCLING', 75), (6, 'RUNNING', 55)):
+            f = lunes + pd.Timedelta(days=dia)
+            if f <= hoy_:
+                _sesion(f, sport, mins, 0.0)
+
+    # Semanas del plan
+    for w in range(sem_tot):
+        lunes = ini + pd.Timedelta(days=w * 7)
+        if lunes > hoy_:
+            break
+        sem = w + 1
+        prog = sem / sem_tot
+        sem_rest = sem_tot - sem + 1
+        fase = ('COMPETENCIA' if sem_rest <= 1 else 'TAPERING' if sem_rest <= 3 else
+                'PICO' if sem_rest <= 6 else 'CONSTRUCCION' if sem_rest <= 12 else 'BASE')
+        f_ini = 3 if nuevo else 5
+        n_ses = int(round(f_ini + (6 - f_ini) * min(prog * 1.3, 1.0)))
+        n_ses = 3 if fase == 'COMPETENCIA' else n_ses - (fase == 'TAPERING')
+        n_ses = int(min(max(n_ses, 3), 6))
+        vol = (0.45 + 0.55 * min(prog / 0.85, 1.0)) \
+            * {'BASE': 0.80, 'TAPERING': 0.55, 'COMPETENCIA': 0.35}.get(fase, 1.0) \
+            * (0.80 if nuevo else 1.0)
+        if sem % 4 == 0 and fase in ('BASE', 'CONSTRUCCION', 'PICO') and sem < sem_tot - 2:
+            vol *= 0.6
+        intensa = fase in ('CONSTRUCCION', 'PICO')
+        # El deportista de la demo sigue lo que el sistema le prescribe: el lunes se
+        # decide el tipo de semana con la carga acumulada hasta el domingo (Tabla 7)
+        if filas:
+            _prev = pd.DataFrame(filas)
+            _fit = fitness_desde_actividades(_prev[_prev['date'] < lunes], 52, 190, sexo)
+            if not _fit.empty:
+                _fit = _fit[_fit['date'] < lunes]
+            tipo, _ = decidir_tipo_semana(_fit)
+        else:
+            tipo = 'MANTENIMIENTO'
+        if tipo == 'DESCANSO':
+            continue
+        if tipo == 'MANTENIMIENTO':
+            prog_m = max(sem - 1, 1) / sem_tot
+            vol *= (0.45 + 0.55 * min(prog_m / 0.85, 1.0)) / (0.45 + 0.55 * min(prog / 0.85, 1.0))
+            intensa = False
+        evento = eventos_demo(sem_tot).get(sem)
+        if evento == 'viaje':
+            continue
+        if evento == 'sobrecarga':
+            vol *= 1.8
+            n_ses = 6
+            intensa = True
+        for dia, sport, pico in catalogo[:n_ses]:
+            f = lunes + pd.Timedelta(days=dia)
+            if eventos_demo(sem_tot).get(sem + 1) == 'viaje' and dia >= 4:
+                continue                              # el viaje empieza el viernes anterior
+            if f > hoy_ or (rng.random() < 0.10 and not evento):      # futuro o sesión no realizada
+                continue
+            _sesion(f, sport, max(pico * vol, 20), prog,
+                    intensa and (dia in (1, 2) or evento == 'sobrecarga'))
+    if not filas:
+        return pd.DataFrame(columns=['athlete', 'sport', 'date', 'avg_speed_kmh',
+                                     'avg_hr', 'max_hr', 'moving_time'])
     return pd.DataFrame(filas)
 
 
@@ -699,7 +793,7 @@ def fitness_desde_actividades(acts, fc_rep, fc_max, sexo='M'):
     daily = df.groupby('date')['trimp'].sum()
     if daily.empty:
         return pd.DataFrame()
-    idx = pd.date_range(daily.index.min(), pd.Timestamp.today().normalize(), freq='D')
+    idx = pd.date_range(daily.index.min(), max(fecha_hoy(), daily.index.max()), freq='D')
     daily = daily.reindex(idx, fill_value=0.0)
     ctl = daily.ewm(span=42, adjust=False).mean()
     atl = daily.ewm(span=7, adjust=False).mean()
@@ -1032,7 +1126,7 @@ def calcular_fase(fecha_comp, perfil_tipo, fecha_inicio=None, semana_sim=None):
       las semanas restantes se derivan de ella, no del calendario.
     """
     sem_min = SEMANAS_MINIMAS[perfil_tipo]
-    hoy = pd.Timestamp.today().normalize()
+    hoy = fecha_hoy()
     ini = hoy if fecha_inicio is None else pd.Timestamp(fecha_inicio).normalize()
     if ini > hoy:
         ini = hoy  # no permitir inicio en el futuro
@@ -1810,7 +1904,7 @@ FRASES_DIA = [
     "mejor una semana sostenible que tres heroicas y una lesión.",
     "tu mejor sesión es la que te deja con ganas de la siguiente.",
 ]
-frase_base = FRASES_DIA[date.today().timetuple().tm_yday % len(FRASES_DIA)]
+frase_base = FRASES_DIA[fecha_hoy().dayofyear % len(FRASES_DIA)]
 
 # ---------------- Configuración del plan ----------------
 # Fecha de inicio = ANCLA del plan, persistida por usuario (por atleta de Strava; 'demo' si no).
@@ -1970,12 +2064,32 @@ with st.sidebar:
                            use_container_width=True)
             st.link_button('Revocar acceso (apps)', 'https://www.strava.com/settings/apps',
                            use_container_width=True)
-    with st.expander('🎛️ Opciones de demostración', expanded=False):
-        sim_on = st.toggle('Simular semana', value=False,
-                           help='Para presentaciones: fuerza la semana del plan sin depender '
-                                'de la fecha real. Recalcula fase, carga y plan.')
-        semana_sim = (st.slider('Semana actual (simulada)', 1, sem_tot_plan,
-                                min(6, sem_tot_plan)) if sim_on else None)
+    st.caption('El simulador de días aparece en la página principal cuando usas los '
+               'datos de demostración.')
+semana_sim = None   # la simulación es por días (fecha simulada), no por semana forzada
+
+# ---------------- Simulador de días (solo con datos de demostración) ----------------
+# Con datos reales de Strava el plan sigue el calendario; con la demo, el usuario puede
+# avanzar la fecha y ver cómo cambian la fase, la carga, el tipo de semana y las sesiones.
+_demo_activo = not (fuente == 'strava' and _tiene_acts)
+_hoy_real = date.today()
+_sim_lo = fecha_inicio
+_sim_hi = max(fecha_comp, fecha_inicio)
+if _demo_activo:
+    _fs = st.session_state.get('fecha_sim')
+    if _fs is None or not (_sim_lo <= _fs <= _sim_hi):
+        st.session_state['fecha_sim'] = min(max(_hoy_real, _sim_lo), _sim_hi)
+else:
+    st.session_state.pop('fecha_sim', None)
+
+
+def _mover_sim(dias, lo, hi):
+    v = st.session_state.get('fecha_sim', lo) + timedelta(days=dias)
+    st.session_state['fecha_sim'] = min(max(v, lo), hi)
+
+
+def _sim_a_hoy(lo, hi):
+    st.session_state['fecha_sim'] = min(max(date.today(), lo), hi)
 
 # Si se eligió Strava y hay actividades sincronizadas, reemplazan al historial
 # local (el motor calcula FC máx, zonas y valida ritmos con datos reales)
@@ -1989,7 +2103,7 @@ if fuente == 'strava':
 per = calcular_fase(fecha_comp, perfil_tipo, fecha_inicio, semana_sim)
 
 # --- Cabecera completa: saludo y frase del día (Gemini si está disponible) ---
-_frase = generar_frase_dia(nombre, per['fase'], date.today().toordinal(), frase_base)
+_frase = generar_frase_dia(nombre, per['fase'], fecha_hoy().toordinal(), frase_base)
 _hdr_slot.markdown(
     '<div class="brand"><span class="dot"></span>Mi plan 70.3</div>'
     f'<div class="hola">{t("hola", n=nombre)}</div>'
@@ -2011,11 +2125,11 @@ if not usando_strava:
     acts = acts_demo_progresivo(per, sexo, fecha_inicio)
 zonas = calcular_zonas(perfil_row, acts, perfil_tipo, pred_bici)
 
-# Con Strava, la curva de forma (CTL/ATL/TSB) también se calcula en vivo
-if usando_strava:
-    _fit_str = fitness_desde_actividades(acts, zonas['fc_rep'], zonas['fc_max'], sexo)
-    if not _fit_str.empty:
-        fitness = _fit_str
+# La curva de forma (CTL/ATL/TSB) se calcula de las actividades: las reales de Strava
+# o las de la demo, que siguen el plan y por eso evolucionan al simular los días.
+_fit_vivo = fitness_desde_actividades(acts, zonas['fc_rep'], zonas['fc_max'], sexo)
+if not _fit_vivo.empty:
+    fitness = _fit_vivo
 
 # Inferencia con los modelos entrenados (si están disponibles en salidas/modelos/)
 modelos = cargar_modelos()
@@ -2056,15 +2170,58 @@ if perfil_tipo == 'experimentado':
 # (Strava no los proporciona); si no, la regla se apoya solo en el TSB.
 _bb_dec = st.session_state.get('bb') if st.session_state.get('recalc_done') else None
 _st_dec = st.session_state.get('stress') if st.session_state.get('recalc_done') else None
-tipo_semana, motivo_semana = decidir_tipo_semana(fitness, _bb_dec, _st_dec)
+# Se evalúa el estado al cierre de la semana anterior (como en la simulación de la
+# Tabla 16), para que el plan no cambie a mitad de semana; el registro matinal de
+# Body Battery y estrés sí actúa en el día.
+_lunes = fecha_hoy() - pd.Timedelta(days=fecha_hoy().dayofweek)
+_fit_dec = fitness
+if not fitness.empty and 'date' in fitness.columns:
+    _prev = fitness[pd.to_datetime(fitness['date']) < _lunes]
+    if len(_prev) >= 7:
+        _fit_dec = _prev
+tipo_semana, motivo_semana = decidir_tipo_semana(_fit_dec, _bb_dec, _st_dec)
+# Nombre visible del tipo de semana: en tapering y en la semana de la prueba la fase
+# sustituye a carga y mantenimiento (nunca a descanso ni a regenerativa)
+nombre_semana = NOMBRE_TIPO[tipo_semana]
+if per['fase'] in ('TAPERING', 'COMPETENCIA') and tipo_semana in ('CARGA', 'MANTENIMIENTO'):
+    nombre_semana = 'Tapering' if per['fase'] == 'TAPERING' else 'Carrera'
+    motivo_semana += '; en esta fase manda la puesta a punto para la prueba'
 
 # ---------------- Panel de hoy: sesión + indicadores clave, a la vista ----------------
 if not _config_ok:
     st.markdown('<div class="preview">Vista previa con datos de demostración</div>',
                 unsafe_allow_html=True)
 
+if _demo_activo and _sim_hi > _sim_lo:
+    with st.container(border=True):
+        _fh = fecha_hoy()
+        _dif = (_fh.date() - _hoy_real).days
+        _rel = ('hoy' if _dif == 0 else (f'dentro de {_dif} días' if _dif > 0 else f'hace {-_dif} días'))
+        _s = st.columns([2.6, 0.75, 0.75, 1.0, 0.7], vertical_alignment='center')
+        _s[0].markdown(
+            '<div class="sim-lab">🎛️ <b>Simulador (demo)</b> · avanza los días y mira cómo cambia el plan'
+            f'<br><span>{DIAS_ES[_fh.dayofweek]} {_fh:%d/%m/%Y} ({_rel}) · semana '
+            f"{per['semana_actual']} de {per['semanas_totales']} · fase "
+            f"{NOMBRE_FASE.get(per['fase'], per['fase'])}</span></div>", unsafe_allow_html=True)
+        _s[1].button('◀ Día', on_click=_mover_sim, args=(-1, _sim_lo, _sim_hi),
+                     use_container_width=True, disabled=_fh.date() <= _sim_lo)
+        _s[2].button('Día ▶', on_click=_mover_sim, args=(1, _sim_lo, _sim_hi),
+                     use_container_width=True, disabled=_fh.date() >= _sim_hi)
+        _s[3].button('Semana ▶▶', on_click=_mover_sim, args=(7, _sim_lo, _sim_hi),
+                     use_container_width=True, disabled=_fh.date() >= _sim_hi)
+        _s[4].button('Hoy', on_click=_sim_a_hoy, args=(_sim_lo, _sim_hi),
+                     use_container_width=True, help='Volver a la fecha real')
+        st.slider('Fecha simulada', min_value=_sim_lo, max_value=_sim_hi, key='fecha_sim',
+                  format='DD/MM/YYYY', label_visibility='collapsed')
+        _ev = {v: k for k, v in eventos_demo(per['semanas_totales']).items()}
+        st.caption(f"📌 Guion de la demo: en la semana {_ev['viaje']} el deportista no entrena (viaje) "
+                   f"y en la {_ev['sobrecarga']} entrena de más (sobrecarga). Avanza a la semana "
+                   "siguiente de cada una para ver cómo el tipo de semana y el plan responden. "
+                   "Cada lunes se decide la semana con la carga de la anterior; el registro matinal "
+                   "ajusta el día.")
+
 _plan_hoy_card, _ = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
-_dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+_dia_hoy = DIAS_ES[fecha_hoy().dayofweek]
 _ses_hoy_card = next((s for s in _plan_hoy_card if str(s['dia']).startswith(_dia_hoy)), None)
 
 _col_hoy, _col_kpi = st.columns([1.45, 1], gap='medium')
@@ -2118,7 +2275,7 @@ with _col_kpi:
          f"semana {per['semana_actual']} de {per['semanas_totales']}"
          f'<div class="bar"><div style="width:{_prog}%"></div></div>', '', ''),
         ('Tu 70.3', f"{per['semanas_restantes']} sem", f'{fecha_comp:%d/%m/%Y}', '', ''),
-        ('Semana de', NOMBRE_TIPO[tipo_semana], 'según tu frescura (TSB)', _tipo_col, _mot),
+        ('Semana de', nombre_semana, 'según tu frescura (TSB)', _tipo_col, _mot),
         ('Forma (CTL)', '—' if np.isnan(_ctl_now) else f'{_ctl_now:.0f}',
          f'objetivo {CTL_OBJETIVO_70_3}', '', GLOSARIO['CTL / ATL / TSB'].replace('"', "'")),
     ]
@@ -2166,7 +2323,7 @@ if st.session_state.get('recalc_done'):
         f'<div class="val">{_val}</div><div class="sub" style="color:{_clr};font-weight:700">{_stt}</div></div>'
         for _lab, _val, _stt, _clr, _hlp in _hoy_items) + '</div>', unsafe_allow_html=True)
 
-    dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+    dia_hoy = DIAS_ES[fecha_hoy().dayofweek]
     ses_df = datos['sesiones_plan']
     ses_hoy = (ses_df[(ses_df['athlete'] == atleta) &
                       (ses_df['dia'].str.startswith(dia_hoy))].to_dict('records')
@@ -2182,6 +2339,8 @@ if st.session_state.get('recalc_done'):
         sesion_hoy_txt = f"{_ses_hoy_card['deporte']} · {_ses_hoy_card['tipo']}" + \
                          (f" · {_ses_hoy_card['dur_min']} min" if _ses_hoy_card['dur_min'] else '')
 
+    if not ses_hoy and _ses_hoy_card:      # plan generado en vivo (demo o Strava)
+        ses_hoy = [_ses_hoy_card]
     decision, motivos, detalle = actualizar_hoy(
         ses_hoy, zonas, st.session_state['sueno'], st.session_state['bb'],
         st.session_state['stress'], st.session_state.get('enfermo', False),
@@ -2247,7 +2406,7 @@ with tab_forma:
         if acts is not None and not getattr(acts, 'empty', True) and 'date' in acts.columns:
             _ad = pd.to_datetime(acts['date'], utc=True, errors='coerce').dt.tz_localize(None).dropna()
             if not _ad.empty:
-                dias_inactivo = int((pd.Timestamp.today().normalize() - _ad.max().normalize()).days)
+                dias_inactivo = int((fecha_hoy() - _ad.max().normalize()).days)
         # Desentrenando = la frescura viene de PERDER forma, no de un taper controlado.
         # La clave para separar taper (bueno) de desentrenamiento (falsa señal de estar
         # a punto) es la MAGNITUD de la caída de CTL en las últimas 4 semanas, medida
@@ -2344,7 +2503,7 @@ with tab_forma:
         '<div style="height:7px;background:#eef3f7;border-radius:6px;overflow:hidden;">'
         f'<div style="height:100%;width:{_prog_pct}%;background:#1d6fa5;border-radius:6px;"></div>'
         '</div>', unsafe_allow_html=True)
-    _sim_txt = (' · 🎛️ modo simulación (semana forzada para la demo)' if semana_sim
+    _sim_txt = (' · 🎛️ fecha simulada en la demo' if fecha_hoy().date() != date.today()
                 else ' · la semana avanza sola con el calendario desde tu fecha de inicio')
     st.caption(f"📅 Estás en la **semana {per['semana_actual']} de {per['semanas_totales']}** "
                f"del plan · faltan {per['semanas_restantes']} semanas para tu 70.3 "
@@ -2451,9 +2610,13 @@ with tab_semana:
 
     def _render_semana(sesiones, recalc=None):
         """Semana en rejilla: 7 tarjetas compactas (4 por fila en escritorio, 1 en móvil)."""
-        dia_hoy = DIAS_ES[pd.Timestamp.today().dayofweek]
+        dia_hoy = DIAS_ES[fecha_hoy().dayofweek]
+        lunes = fecha_hoy() - pd.Timedelta(days=fecha_hoy().dayofweek)
         tarjetas = ''
         for s in sesiones:
+            _i = next((k for k, d in enumerate(DIAS_ES) if str(s['dia']).startswith(d)), 0)
+            _f = lunes + pd.Timedelta(days=_i)
+            pasado = _f < fecha_hoy()
             dep = s['deporte']
             color = {'Natación': '#3b82f6', 'Ciclismo': '#22a06b', 'Carrera': '#f59e0b',
                      'Fuerza': '#8b5cf6', 'Competencia': '#ef4444'}.get(dep, '#c3ccd5')
@@ -2471,8 +2634,9 @@ with tab_semana:
             if es_hoy and recalc and recalc['decision'] != 'MANTENER':
                 ajuste = f'<div class="ajuste">🔁 {recalc["decision"].capitalize()}</div>'
             tarjetas += (
-                f'<div class="ses{" hoy" if es_hoy else ""}" style="border-top-color:{color}">'
-                f'<div class="dia">{s["dia"]}{"<span>HOY</span>" if es_hoy else ""}</div>'
+                f'<div class="ses{" hoy" if es_hoy else ""}{" pasado" if pasado else ""}" '
+                f'style="border-top-color:{color}">'
+                f'<div class="dia">{s["dia"]} {_f:%d/%m}{"<span>HOY</span>" if es_hoy else ""}</div>'
                 f'<div class="dep">{EMOJI_DEP.get(dep, "⚪")} {dep}</div>'
                 f'<div class="tipo">{s["tipo"]}</div>'
                 + (f'<div class="meta">{meta}</div>' if meta else '')
@@ -2481,7 +2645,7 @@ with tab_semana:
 
 
     def _sesion_de_hoy(sesiones):
-        dia = DIAS_ES[pd.Timestamp.today().dayofweek]
+        dia = DIAS_ES[fecha_hoy().dayofweek]
         for s in sesiones:
             if str(s['dia']).startswith(dia):
                 return s
@@ -2523,15 +2687,17 @@ with tab_semana:
         plan, meta = generar_plan_semanal(perfil_tipo, per, zonas, acts, sexo, tipo_semana)
         origen = 'datos Strava' if usando_strava else 'modo demo'
         st.markdown(f'<span class="badge" style="background:#e6f1fb;color:#0c447c;">'
-                    f'Plan adaptativo ({origen}) · semana de {NOMBRE_TIPO[tipo_semana].lower()} · '
+                    f'Plan adaptativo ({origen}) · semana de {nombre_semana.lower()} · '
                     f'fase {per["fase"].capitalize()} · '
                     f'semana {meta["sem_idx"]} de {meta["sem_tot"]}</span>',
                     unsafe_allow_html=True)
         _det_sem = st.expander('ⓘ Cómo se ha construido esta semana')
-        _det_sem.caption(f"Tipo de semana: **{NOMBRE_TIPO[tipo_semana]}** — {motivo_semana}.")
+        _det_sem.caption(f"Tipo de semana: **{nombre_semana}** — {motivo_semana}.")
         base_txt = (f"tu frecuencia actual (~{meta['freq_act']:.0f} sesiones/sem) y "
                     if meta['freq_act'] else "tu perfil y ")
-        _det_sem.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones**, calculadas a partir de "
+        _det_sem.caption(f"Carga **progresiva**: esta semana **{meta['n_ses']} sesiones de natación, bici y "
+                         f"carrera**" + (f" más **{meta['n_fuerza']} de fuerza**" if meta.get('n_fuerza') else '')
+                         + f", calculadas a partir de "
                    f"{base_txt}el avance del plan (semana {meta['sem_idx']}/{meta['sem_tot']}). "
                    "La frecuencia y el volumen suben de forma gradual hacia la carrera para evitar sobrecarga.")
         if meta.get('descarga'):
@@ -2548,13 +2714,14 @@ with tab_semana:
                        f"previene lesiones, y el trabajo en cuesta/bajada añade potencia y tolerancia "
                        f"muscular, pilares de un 70.3.")
         # Resumen de la semana ARRIBA, antes del detalle día a día
-        ses_n = sum(1 for s in plan if s['deporte'] not in ('Descanso', 'Movilidad'))
+        ses_res = sum(1 for s in plan if s['deporte'] in ('Natación', 'Ciclismo', 'Carrera', 'Competencia'))
+        ses_fz = sum(1 for s in plan if s['deporte'] == 'Fuerza')
         vol = sum(s['dur_min'] for s in plan)
         km_nat = sum(s['km'] for s in plan if s['deporte'] == 'Natación')
         km_cic = sum(s['km'] for s in plan if s['deporte'] == 'Ciclismo')
         km_car = sum(s['km'] for s in plan if s['deporte'] in ('Carrera', 'Competencia'))
         c = st.columns(5)
-        for col, (lab, val) in zip(c, [('Sesiones', f"{ses_n}"),
+        for col, (lab, val) in zip(c, [('Sesiones', f"{ses_res} + {ses_fz} fuerza" if ses_fz else f"{ses_res}"),
                                        ('Volumen', f"{min2t(vol)} h"),
                                        ('Natación', f"{km_nat:.1f} km"),
                                        ('Ciclismo', f"{km_cic:.0f} km"),
@@ -2566,12 +2733,12 @@ with tab_semana:
     st.subheader(t('h_porque'))
     explicacion_plan = generar_explicacion_plan(atleta, perfil_tipo, per['fase'],
                                                 per['semanas_restantes'], ctl,
-                                                NOMBRE_TIPO[tipo_semana].lower(), motivo_semana,
+                                                nombre_semana.lower(), motivo_semana,
                                                 _plan_hoy_card)
     if explicacion_plan:
         st.info(f"💡 {explicacion_plan}")
     else:
-        st.info(f"💡 Semana de **{NOMBRE_TIPO[tipo_semana].lower()}** ({motivo_semana}). "
+        st.info(f"💡 Semana de **{nombre_semana.lower()}** ({motivo_semana}). "
                 f"Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
                 f"con {per['semanas_restantes']} semanas para la competencia. "
                 f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas. "
