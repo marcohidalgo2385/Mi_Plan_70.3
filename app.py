@@ -632,7 +632,7 @@ def generar_explicacion_plan(atleta, perfil_tipo, fase, semanas_restantes, ctl_a
                              for s in (sesiones or []) if s['deporte'] != 'Descanso')
         prompt = f"""Eres un entrenador de triatlón. Escribe una justificación breve (4-5 frases) de por qué
         el plan actual es ideal para {atleta}, un triatleta {perfil_tipo} que está en fase {fase}
-        con {semanas_restantes} semanas para la carrera y forma actual (CTL) de {ctl_actual:.0f}.
+        con {semanas_restantes} para la carrera y forma actual (CTL) de {ctl_actual:.0f}.
         El sistema ya decidió una semana de tipo {tipo_semana} por este motivo: {motivo}.
         Sesiones de la semana: {_ses_txt}.
         NO cambies ninguna cifra: usa exactamente los valores anteriores. Tú solo explicas, no decides.
@@ -1390,8 +1390,20 @@ def calcular_fase(fecha_comp, perfil_tipo, fecha_inicio=None, semana_sim=None):
         fase = 'CONSTRUCCION'
     else:
         fase = 'BASE'
+    # Días exactos hasta la prueba: se muestran junto a las semanas (redondeadas hacia
+    # arriba) para que «24 semanas» y «168 días» se lean como la misma cuenta atrás
+    dias_rest = (max((pd.Timestamp(fecha_comp).normalize() - hoy).days, 0)
+                 if fecha_comp else sem_rest * 7)
     return {'fase': fase, 'semanas_restantes': sem_rest, 'semanas_totales': sem_tot,
-            'semana_actual': sem_actual, 'plan_viable': viable, 'semanas_minimas': sem_min}
+            'semana_actual': sem_actual, 'plan_viable': viable, 'semanas_minimas': sem_min,
+            'dias_restantes': dias_rest}
+
+
+def txt_restante(per):
+    """«24 semanas (168 días)»: semanas del plan y días exactos hasta la prueba."""
+    s, d = int(per['semanas_restantes']), per.get('dias_restantes')
+    base = f"{s} semana{'s' if s != 1 else ''}"
+    return f"{base} ({d} día{'s' if d != 1 else ''})" if d is not None else base
 
 
 def analizar_objetivo(anterior, objetivo_total, sem_prep):
@@ -2075,7 +2087,7 @@ def html_frase_dia(frase, nombre, per, fh):
         f'<div class="hero-q">{frase}</div>'
         '<div class="hero-by">💪 ¡A por ello!'
         f"<span>Semana {per['semana_actual']} de {per['semanas_totales']}</span>"
-        f"<span>{per['semanas_restantes']} semanas para tu 70.3</span></div>"
+        f"<span>{txt_restante(per)} para tu 70.3</span></div>"
         '</div>')
 
 
@@ -2618,15 +2630,30 @@ with _col_kpi:
              if (not _fit_dec.empty and 'TSB' in _fit_dec.columns) else float('nan'))
     _tsb_txt = ('descansado' if _tsb7 > 5 else 'equilibrio' if _tsb7 >= -10 else
                 'cargado' if _tsb7 >= -25 else 'muy cargado') if not np.isnan(_tsb7) else ''
+    # Dos lecturas distintas del TSB: la media de la semana ANTERIOR (lun-dom), que es la
+    # que decide el tipo de semana el lunes (Tabla 7), y el valor de HOY, que se mueve a
+    # diario y es el que muestra la pestaña de forma. Se rotulan para no confundirlas.
+    _tsb_hoy = (float(fitness['TSB'].dropna().iloc[-1])
+                if (not fitness.empty and 'TSB' in fitness.columns
+                    and not fitness['TSB'].dropna().empty) else float('nan'))
+    _sem_dec = ''
+    if not _fit_dec.empty and 'date' in _fit_dec.columns:
+        _fdd = pd.to_datetime(_fit_dec['date']).tail(7)
+        _sem_dec = f"{_fdd.min():%d/%m}–{_fdd.max():%d/%m}"
     _glos = GLOSARIO['CTL / ATL / TSB'].replace('"', "'")
+    _tip_tsb = (f"Media del TSB de la semana {_sem_dec}: es la que decide el tipo de semana "
+                f"cada lunes (Tabla 7). El TSB de hoy cambia a diario"
+                + (f" ({_tsb_hoy:+.0f})" if not np.isnan(_tsb_hoy) else '')
+                + ": sube los días de descanso y baja los de carga. " + _glos)
     _kpis_html = [
         ('Semana de', nombre_semana, 'decidida por tu frescura', _tipo_col, _mot),
         ('Esta semana', f"{_ses_r} + {_ses_f} 💪" if _ses_f else f"{_ses_r}",
          f'sesiones · {min2t(_vol_sem)} h', '', 'Sesiones de natación, bici y carrera + fuerza'),
         ('Forma (CTL)', '—' if np.isnan(_ctl_now) else f'{_ctl_now:.0f}',
          f'objetivo {CTL_OBJETIVO_70_3}', '', _glos),
-        ('Frescura (TSB)', '—' if np.isnan(_tsb7) else f'{_tsb7:+.0f}',
-         f'media de 7 días · {_tsb_txt}', '', _glos),
+        ('Frescura semana ant.', '—' if np.isnan(_tsb7) else f'{_tsb7:+.0f}',
+         f'TSB medio {_sem_dec} · {_tsb_txt}'
+         + (f' · hoy {_tsb_hoy:+.0f}' if not np.isnan(_tsb_hoy) else ''), '', _tip_tsb),
     ]
     st.markdown('<div class="kpis">' + ''.join(
         f'<div class="kpi" title="{tip}"><div class="lab">{lab}</div>'
@@ -2790,6 +2817,10 @@ with tab_forma:
         col_fn(f"**Tu frescura hoy: TSB = {tsb:+.1f}** (referencia 0). {banda}.\n\n"
                f"CTL/Fitness {ctl:.0f} · ATL/Fatiga {atl:.0f}. El TSB es la resta (forma − fatiga): "
                f"por encima de 0 estás descansado, por debajo estás cargado. "
+               + (f"El tipo de semana no se decide con este valor diario sino con la **media de la "
+                  f"semana anterior ({_sem_dec}): {_tsb7:+.1f}**, que es la del panel superior; "
+                  f"por eso pueden diferir. "
+                  if not np.isnan(_tsb7) and _sem_dec else '')
                + ("**Ojo:** un TSB alto solo indica forma óptima cuando llega tras un taper desde una "
                   "CTL alta y estable; si la CTL viene cayendo, la frescura es por desentrenamiento."
                   if desentrenando else
@@ -3048,7 +3079,7 @@ with tab_semana:
     # ---------------- ¿Por qué este plan? ----------------
     st.subheader(t('h_porque'))
     explicacion_plan = generar_explicacion_plan(atleta, perfil_tipo, per['fase'],
-                                                per['semanas_restantes'], ctl,
+                                                txt_restante(per), ctl,
                                                 nombre_semana.lower(), motivo_semana,
                                                 _plan_hoy_card)
     if explicacion_plan:
@@ -3056,7 +3087,7 @@ with tab_semana:
     else:
         st.info(f"💡 Semana de **{nombre_semana.lower()}** ({motivo_semana}). "
                 f"Este plan está diseñado para un atleta {perfil_tipo} en fase {per['fase']} "
-                f"con {per['semanas_restantes']} semanas para la competencia. "
+                f"con {txt_restante(per)} para la competencia. "
                 f"La carga progresiva y la validación contra tu historial garantizan ritmos realistas. "
                 f"Además del nado, la bici y la carrera, incluye **fuerza** de piernas y core (te hace "
                 f"más eficiente y previene lesiones) y **desnivel** —subidas en bici para ganar potencia "
@@ -3079,7 +3110,7 @@ with tab_carrera:
     if per['fase'] not in ('COMPETENCIA', 'TAPERING'):
         st.info('🏁 El plan de carrera, km a km, aparece en las últimas semanas del plan '
                 '(tapering y semana de la prueba). Te quedan '
-                f"{per['semanas_restantes']} semanas.")
+                f"{txt_restante(per)}.")
 
 with tab_info:
     # ---------------- Glosario ----------------
