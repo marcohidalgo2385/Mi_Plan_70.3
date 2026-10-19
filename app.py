@@ -203,11 +203,55 @@ st.markdown("""
   .badge {display:inline-block; border-radius:14px; padding:4px 14px; font-weight:700; font-size:0.85rem;}
   div[data-testid="stImage"] img {max-width:100%; height:auto;}
 
+  /* Tema claro siempre. Si el móvil está en modo oscuro, Streamlit pinta el fondo negro
+     y el texto blanco, y los textos quedan invisibles sobre las tarjetas blancas.
+     Se fija el esquema claro aunque falle config.toml o el usuario cambie el tema. */
+  :root {color-scheme: light;}
+  .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"],
+  [data-testid="stBottomBlockContainer"], [data-testid="stSidebar"] > div:first-child
+      {background-color:#ffffff !important; color:#16202b !important;}
+  [data-testid="stSidebar"] > div:first-child {background-color:#eef3f7 !important;}
+  .stApp [data-testid="stMarkdownContainer"] :is(p, li, h1, h2, h3, h4, h5, strong),
+  .stApp :is(h1, h2, h3, h4), .stApp label, .stApp [data-testid="stWidgetLabel"] *,
+  .stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stExpander"] summary *,
+  .stApp .stTabs [data-baseweb="tab"] p {color:#16202b;}
+  .stApp [data-testid="stCaptionContainer"] {color:#5b6670 !important;}
+  .stApp [data-testid="stExpander"] details {background:#fff; border-color:#e2e8ee;}
+  .stApp [data-baseweb="input"], .stApp [data-baseweb="select"] > div,
+  .stApp [data-baseweb="base-input"], .stApp input, .stApp textarea
+      {background-color:#fff !important; color:#16202b !important;}
+  div[data-testid="stMetric"] [data-testid="stMetricLabel"] * {color:#5b6670 !important;}
+  div[data-testid="stMetric"] [data-testid="stMetricValue"],
+  div[data-testid="stMetric"] [data-testid="stMetricValue"] * {color:#16202b !important;}
+  [data-testid="stHeader"] svg, [data-testid="stSidebarCollapsedControl"] svg {color:#16202b; fill:#16202b;}
+
   /* Móvil */
   @media (max-width: 640px) {
     .block-container, [data-testid="stMainBlockContainer"] {padding: 3.4rem .9rem 1.5rem;}
     .brand {font-size:1.4rem;}
     .hoy-card .titulo {font-size:1.12rem;}
+    /* Filas de indicadores (st.metric): en el móvil Streamlit apila cada columna a todo
+       el ancho y deja una tarjeta enorme por dato. Aquí van tres por fila, compactas. */
+    [data-testid="stHorizontalBlock"]:has(> div [data-testid="stMetric"]):not(:has([data-testid="stHorizontalBlock"])) {
+        flex-direction:row !important; flex-wrap:wrap !important; gap:.45rem !important;}
+    [data-testid="stHorizontalBlock"]:has(> div [data-testid="stMetric"]):not(:has([data-testid="stHorizontalBlock"]))
+        > :is([data-testid="column"], [data-testid="stColumn"]) {
+        min-width:calc(33.3% - .45rem) !important; flex:1 1 calc(33.3% - .45rem) !important;
+        width:auto !important;}
+    div[data-testid="stMetric"] {padding:7px 9px;}
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {font-size:.7rem !important;}
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {font-size:1.15rem !important;}
+    /* Botones del simulador de la demo: en dos filas en lugar de cinco */
+    [data-testid="stHorizontalBlock"]:has(> div .stButton):not(:has([data-testid="stHorizontalBlock"])):not(:has(> div [data-testid="stMetric"])) {
+        flex-direction:row !important; flex-wrap:wrap !important; gap:.4rem !important;}
+    [data-testid="stHorizontalBlock"]:has(> div .stButton):not(:has([data-testid="stHorizontalBlock"])):not(:has(> div [data-testid="stMetric"]))
+        > :is([data-testid="column"], [data-testid="stColumn"]) {
+        min-width:calc(25% - .4rem) !important; flex:1 1 calc(25% - .4rem) !important; width:auto !important;}
+    [data-testid="stHorizontalBlock"]:has(> div .stButton):not(:has([data-testid="stHorizontalBlock"]))
+        > :is([data-testid="column"], [data-testid="stColumn"]):has(.sim-lab) {
+        min-width:100% !important; flex-basis:100% !important;}
+    .kpis {gap:7px;}
+    .kpi {padding:8px 10px;}
   }
 </style>
 """, unsafe_allow_html=True)
@@ -521,6 +565,99 @@ def guardar_inicio_plan(d, user_key='demo'):
         import json
         data = _estado_plan_load()
         data[user_key] = pd.Timestamp(d).date().isoformat()
+        with open(ESTADO_PLAN_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------------
+# Configuración persistente del plan
+# ----------------------------------------------------------------------------
+# Streamlit borra st.session_state al recargar la página o al abrirla en otro dispositivo,
+# y obligaba a configurar el plan cada día. Dos capas de persistencia, sin base de datos:
+#  1) El ENLACE: la configuración (fechas, perfil, sexo, demo, tiempos) se escribe en la
+#     URL en cada ejecución. Guardar la página en favoritos o en la pantalla de inicio del
+#     móvil conserva el plan, y el mismo enlace lo abre igual en otro dispositivo.
+#  2) La CUENTA DE STRAVA: se guarda también en el servidor, asociada al id del deportista,
+#     y se recupera al conectar Strava desde cualquier dispositivo. En Streamlit Community
+#     Cloud ese fichero se pierde si la app se reinicia; el enlace no se pierde nunca.
+CFG_PARAMS = ('ini', 'comp', 'meses', 'perfil', 'sexo', 'demo', 'tn', 'tb', 'tr', 'tt', 'to')
+
+
+def _fecha_param(v):
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except Exception:
+        return None
+
+
+def aplicar_config(cfg):
+    """Vuelca una configuración guardada (dict de textos) en st.session_state.
+    Debe llamarse antes de crear los widgets de configuración."""
+    if not cfg:
+        return False
+    ss = st.session_state
+    ini = _fecha_param(cfg.get('ini'))
+    if ini and ini <= date.today():
+        ss['inicio_plan_val'] = ini
+        ss['inicio_fijado'] = True
+    comp = _fecha_param(cfg.get('comp'))
+    if comp:
+        ss['fecha_comp_sel'] = comp
+        ss['usa_fecha_sel'] = True
+    elif str(cfg.get('meses', '')).isdigit():
+        ss['meses_sel'] = min(max(int(cfg['meses']), 3), 12)
+        ss['usa_fecha_sel'] = False
+    if cfg.get('perfil') in ('nuevo', 'experimentado'):
+        ss['perfil_tipo_sel'] = cfg['perfil']
+    if cfg.get('sexo') in ('M', 'F'):
+        ss['sexo_sel'] = cfg['sexo']
+    if str(cfg.get('demo')) == '1':
+        ss['modo_demo'] = True
+    for k in ('tn', 'tb', 'tr', 'tt', 'to'):
+        if re.fullmatch(r'\d{1,2}:\d{2}', str(cfg.get(k, ''))):
+            ss['t_' + k] = str(cfg[k])
+    return ini is not None or comp is not None
+
+
+def config_desde_url():
+    """Configuración guardada en el enlace. Tras autorizar en Strava, la URL de vuelta
+    solo trae ?code=...; la configuración viaja en el parámetro state del OAuth."""
+    src = {k: st.query_params.get(k) for k in st.query_params.keys()}
+    if src.get('code') and src.get('state'):
+        import urllib.parse
+        src.update(dict(urllib.parse.parse_qsl(src['state'])))
+    return {k: src[k] for k in CFG_PARAMS if src.get(k)}
+
+
+def guardar_config_url(cfg):
+    """Escribe la configuración en la URL (sin recargar la página)."""
+    if st.query_params.get('code'):
+        return                                   # el canje del OAuth limpia la URL
+    actual = {k: st.query_params.get(k) for k in st.query_params.keys()}
+    if actual != cfg:
+        st.query_params.from_dict(cfg)
+
+
+def enlace_plan(cfg):
+    import urllib.parse
+    base = (STRAVA_REDIRECT_URI or '').rstrip('/')
+    return f"{base}/?{urllib.parse.urlencode(cfg)}"
+
+
+def leer_config_servidor(user_key):
+    d = _estado_plan_load().get('cfg_' + user_key)
+    return d if isinstance(d, dict) else {}
+
+
+def guardar_config_servidor(user_key, cfg):
+    try:
+        import json
+        data = _estado_plan_load()
+        if data.get('cfg_' + user_key) == cfg:
+            return
+        data['cfg_' + user_key] = cfg
         with open(ESTADO_PLAN_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f)
     except Exception:
@@ -869,12 +1006,31 @@ def get_strava_auth_url():
     client = init_strava_client()
     if not client:
         return None
+    import urllib.parse
     return client.authorization_url(
         client_id=_strava_client_id_int(),
         redirect_uri=STRAVA_REDIRECT_URI,
         scope=['activity:read_all'],
-        approval_prompt='force',  # muestra siempre la pantalla de autorización
+        # auto: si ya autorizaste la app, Strava vuelve directamente sin preguntar,
+        # así reconectar cada día es un solo toque
+        approval_prompt='auto',
+        # la configuración del plan viaja por el OAuth y se restaura a la vuelta
+        state=urllib.parse.urlencode(config_desde_url()) or None,
     )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_strava_athlete_id(access_token):
+    """Id numérico del deportista en Strava: clave estable para guardar su plan
+    (el token de acceso cambia en cada conexión)."""
+    try:
+        client = init_strava_client()
+        if not client:
+            return None
+        client.access_token = access_token
+        return getattr(client.get_athlete(), 'id', None)
+    except Exception:
+        return None
 
 
 def desconectar_strava():
@@ -884,6 +1040,7 @@ def desconectar_strava():
         st.session_state.pop(k, None)
     try:
         fetch_strava_athlete_name.clear()
+        fetch_strava_athlete_id.clear()
         fetch_strava_activities.clear()
         init_strava_client.clear()
     except Exception:
@@ -2212,7 +2369,11 @@ def grafico_fases(fase_actual, sem_actual, sem_tot):
 datos = cargar_datos()
 hay_datos = not datos['perfiles'].empty
 
-# Procesa el retorno de Strava (?code=...) ANTES de pintar la interfaz
+# Restaura la configuración guardada en el enlace (una vez por sesión) y después procesa
+# el retorno de Strava (?code=...), que limpia la URL; ambos ANTES de pintar la interfaz
+if not st.session_state.get('_cfg_cargada'):
+    st.session_state['_cfg_cargada'] = True
+    aplicar_config(config_desde_url())
 handle_strava_callback()
 
 # ---------------- Datos base ----------------
@@ -2251,13 +2412,20 @@ FRASES_DIA = [
 frase_base = FRASES_DIA[fecha_hoy().dayofyear % len(FRASES_DIA)]
 
 # ---------------- Configuración del plan ----------------
-# Fecha de inicio = ANCLA del plan, persistida por usuario (por atleta de Strava; 'demo' si no).
-_uk = 'demo'
+# Fecha de inicio = ANCLA del plan. Se guarda en el enlace y, con Strava, también en el
+# servidor por id de deportista (antes se usaba un hash del token, que cambia en cada
+# conexión, y el plan no se recuperaba nunca). Sin Strava no se guarda en el servidor:
+# la clave 'demo' sería compartida por todos los visitantes.
+_ath_id = None
+_uk = None
 if st.session_state.get('strava_token'):
-    import hashlib
-    _uk = 'u' + hashlib.sha1(str(st.session_state['strava_token']).encode()).hexdigest()[:10]
+    _ath_id = fetch_strava_athlete_id(st.session_state['strava_token'])
+    if _ath_id:
+        _uk = f'strava_{_ath_id}'
+        if 'inicio_fijado' not in st.session_state:   # el enlace no traía plan
+            aplicar_config(leer_config_servidor(_uk))
 if 'inicio_fijado' not in st.session_state:
-    _persisted = leer_inicio_plan(_uk)
+    _persisted = leer_inicio_plan(_uk) if _uk else None
     st.session_state['inicio_plan_val'] = _persisted or date.today()
     st.session_state['inicio_fijado'] = _persisted is not None
 
@@ -2348,12 +2516,17 @@ with c2:
     if perfil_tipo == 'experimentado':
         st.caption('🏁 Tu último 70.3 (opcional, para un plan orientado a marca)')
         _a, _b, _c = st.columns(3)
-        t_nat = _a.text_input('Natación', '0:42')
-        t_bici = _b.text_input('Bici', '2:52')
-        t_run = _c.text_input('Carrera', '2:01')
+        st.session_state.setdefault('t_tn', '0:42')
+        t_nat = _a.text_input('Natación', key='t_tn')
+        st.session_state.setdefault('t_tb', '2:52')
+        t_bici = _b.text_input('Bici', key='t_tb')
+        st.session_state.setdefault('t_tr', '2:01')
+        t_run = _c.text_input('Carrera', key='t_tr')
         _a, _b = st.columns(2)
-        t_tot = _a.text_input('Total', '5:45')
-        t_objetivo = _b.text_input('Objetivo', '5:30')
+        st.session_state.setdefault('t_tt', '5:45')
+        t_tot = _a.text_input('Total', key='t_tt')
+        st.session_state.setdefault('t_to', '5:30')
+        t_objetivo = _b.text_input('Objetivo', key='t_to')
 
 with c3:
     st.markdown(_paso_html(3, 'Tus fechas', _paso_fechas), unsafe_allow_html=True)
@@ -2374,15 +2547,46 @@ with c3:
         if _b.button('🔒 Fijar', type='primary', use_container_width=True):
             st.session_state['inicio_plan_val'] = _sel
             st.session_state['inicio_fijado'] = True
-            guardar_inicio_plan(_sel, _uk)
+            if _uk:
+                guardar_inicio_plan(_sel, _uk)
             st.rerun()
-    usa_fecha = st.toggle(t('tengo_fecha'), value=True)
+    # Con clave propia: así el valor sobrevive a los reruns y se restaura desde el enlace
+    st.session_state.setdefault('usa_fecha_sel', True)
+    usa_fecha = st.toggle(t('tengo_fecha'), key='usa_fecha_sel')
+    meses = None
     if usa_fecha:
-        fecha_comp = st.date_input(t('cuando_703'),
-                                   value=fecha_inicio + timedelta(weeks=SEMANAS_MINIMAS[perfil_tipo]))
+        st.session_state.setdefault('fecha_comp_sel',
+                                    fecha_inicio + timedelta(weeks=SEMANAS_MINIMAS[perfil_tipo]))
+        fecha_comp = st.date_input(t('cuando_703'), key='fecha_comp_sel', format='DD/MM/YYYY')
     else:
-        meses = st.slider('Meses de plan', 3, 12, 6 if perfil_tipo == 'nuevo' else 3)
+        st.session_state.setdefault('meses_sel', 6 if perfil_tipo == 'nuevo' else 3)
+        meses = st.slider('Meses de plan', 3, 12, key='meses_sel')
         fecha_comp = fecha_inicio + timedelta(weeks=meses * 4)
+
+    # --- Guardar la configuración: en el enlace y, con Strava, en el servidor ---
+    _cfg_guardar = {'ini': pd.Timestamp(fecha_inicio).date().isoformat(),
+                    'perfil': perfil_tipo, 'sexo': sexo}
+    if usa_fecha:
+        _cfg_guardar['comp'] = pd.Timestamp(fecha_comp).date().isoformat()
+    else:
+        _cfg_guardar['meses'] = str(meses)
+    if st.session_state.get('modo_demo') and not _tiene_acts:
+        _cfg_guardar['demo'] = '1'
+    if perfil_tipo == 'experimentado':
+        for _k in ('tn', 'tb', 'tr', 'tt', 'to'):
+            if re.fullmatch(r'\d{1,2}:\d{2}', str(st.session_state.get('t_' + _k, ''))):
+                _cfg_guardar[_k] = st.session_state['t_' + _k]
+    guardar_config_url(_cfg_guardar)
+    if _uk:
+        guardar_config_servidor(_uk, _cfg_guardar)
+    with st.expander('🔖 Guardar mi plan / abrirlo en otro dispositivo'):
+        st.caption('Tu plan se guarda en el enlace de esta página. Añádela a favoritos o a la '
+                   'pantalla de inicio del móvil (Compartir → Añadir a pantalla de inicio) y '
+                   'entrarás cada día con tus fechas, sin configurar nada.'
+                   + (' Con Strava conectado, además, se recupera al volver a conectar.'
+                      if _uk else '')
+                   + ' Para abrirlo en otro dispositivo, copia este enlace:')
+        st.code(enlace_plan(_cfg_guardar), language=None)
 
 # Total de semanas reales del plan (límite del simulador de la barra lateral)
 sem_tot_plan = max(int(np.ceil((pd.Timestamp(fecha_comp) - pd.Timestamp(fecha_inicio)).days / 7)), 1)
