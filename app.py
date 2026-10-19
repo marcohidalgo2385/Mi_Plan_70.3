@@ -1033,11 +1033,73 @@ def fetch_strava_athlete_id(access_token):
         return None
 
 
+# --- Sesión de Strava recordada en el navegador -------------------------------------
+# Streamlit pierde la sesión al recargar, y obligaba a pulsar «Conectar con Strava» en
+# cada visita. Ahora el refresh token de Strava se guarda en una cookie de ESTE navegador
+# (no en el servidor ni en el enlace, para que compartir el enlace no comparta la cuenta).
+# Al volver, la app pide a Strava un token nuevo con él y entra sin pasar por la
+# autorización. «Desconectar» borra la cookie.
+COOKIE_STRAVA = 'mp703_strava'
+COOKIE_DIAS = 60
+
+
+def restaurar_strava_desde_cookie():
+    """Reconecta Strava con el refresh token guardado en la cookie (una vez por sesión)."""
+    ss = st.session_state
+    if 'strava_token' in ss or ss.get('_rt_probado') or st.query_params.get('code'):
+        return
+    ss['_rt_probado'] = True
+    if not (STRAVA_AVAILABLE and STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET):
+        return
+    try:
+        rt = st.context.cookies.get(COOKIE_STRAVA)
+    except Exception:
+        rt = None
+    if not rt or not re.fullmatch(r'[A-Za-z0-9]{20,80}', rt):
+        return
+    try:
+        tok = StravaClient().refresh_access_token(client_id=_strava_client_id_int(),
+                                                  client_secret=STRAVA_CLIENT_SECRET,
+                                                  refresh_token=rt)
+    except Exception:
+        ss['_cookie_borrar'] = True          # token revocado o caducado: se olvida
+        return
+    ss['strava_token'] = tok.get('access_token')
+    ss['strava_refresh_token'] = tok.get('refresh_token') or rt
+    ss['strava_expires_at'] = tok.get('expires_at')
+    ss['fuente_sel'] = 'strava'
+    try:
+        ss['actividades_strava'] = fetch_strava_activities(ss['strava_token'],
+                                                           days=ss.get('dias_sync', 90))
+    except Exception:
+        pass
+
+
+def sincronizar_cookie_strava():
+    """Escribe (o borra) la cookie en el navegador cuando cambia el refresh token."""
+    ss = st.session_state
+    js = None
+    seguro = '; Secure' if str(STRAVA_REDIRECT_URI).startswith('https') else ''
+    if ss.pop('_cookie_borrar', False):
+        js = f"document.cookie='{COOKIE_STRAVA}=; path=/; max-age=0; SameSite=Lax{seguro}';"
+        ss.pop('_rt_cookie', None)
+    else:
+        rt = ss.get('strava_refresh_token')
+        if rt and re.fullmatch(r'[A-Za-z0-9]{20,80}', str(rt)) and ss.get('_rt_cookie') != rt:
+            js = (f"document.cookie='{COOKIE_STRAVA}={rt}; path=/; "
+                  f"max-age={COOKIE_DIAS * 86400}; SameSite=Lax{seguro}';")
+            ss['_rt_cookie'] = rt
+    if js:
+        import streamlit.components.v1 as components
+        components.html(f'<script>{js}</script>', height=0)
+
+
 def desconectar_strava():
     """Borra la sesión de Strava de la app para poder cambiar de cuenta."""
     for k in ('strava_token', 'strava_refresh_token', 'strava_expires_at',
               'actividades_strava'):
         st.session_state.pop(k, None)
+    st.session_state['_cookie_borrar'] = True     # y olvida la sesión en este navegador
     try:
         fetch_strava_athlete_name.clear()
         fetch_strava_athlete_id.clear()
@@ -2375,6 +2437,7 @@ if not st.session_state.get('_cfg_cargada'):
     st.session_state['_cfg_cargada'] = True
     aplicar_config(config_desde_url())
 handle_strava_callback()
+restaurar_strava_desde_cookie()     # si ya conectaste Strava en este navegador, entra solo
 
 # ---------------- Datos base ----------------
 # Perfil base de demostración; con Strava, el historial real sustituye a las actividades
@@ -3372,4 +3435,8 @@ with tab_info:
 st.caption('Demostrador del TFM «Planificación adaptativa de entrenamientos de alta carga '
            'mediante aprendizaje automático: caso de estudio del triatlón de media distancia '
            '(113 km)». El LLM/plantillas explican; los modelos y las reglas deciden.')
+
+# Recuerda (o borra) la sesión de Strava en este navegador. Va al final para que el
+# iframe invisible que escribe la cookie no desplace el contenido.
+sincronizar_cookie_strava()
 # fin app.py
