@@ -3267,15 +3267,22 @@ with tab_zonas:
         st.pyplot(grafico_zonas(zonas), use_container_width=True)
     st.info(f"✓ **Origen de tus ritmos** — {zonas['fuente_z2']}.")
     if infer:
-        partes = []
-        if infer.get('bici_pred_kmh'):
+        # La estimación del modelo solo se muestra en la disciplina con menos de 6 sesiones, que es
+        # donde fija tus ritmos; con historial propio mandan tus sesiones y tu frecuencia cardíaca.
+        partes, _sin_hist = [], []
+        if infer.get('bici_pred_kmh') and _n_dep.get('CYCLING', 0) < 6:
             partes.append(f"bici estimada por XGBoost **{infer['bici_pred_kmh']:.1f} km/h** "
                           f"(objetivo conservador {infer['bici_cons_kmh']:.1f} km/h)")
-        if infer.get('run_pred_kmh'):
+            _sin_hist.append('bici')
+        if infer.get('run_pred_kmh') and _n_dep.get('RUNNING', 0) < 6:
             partes.append(f"carrera estimada **{pace_run(infer['run_pred_kmh'])}** "
                           f"(objetivo conservador {pace_run(infer['run_cons_kmh'])})")
+            _sin_hist.append('carrera')
         if partes:
             st.success('🧠 **Modelos del TFM activos** — ' + ' · '.join(partes) + '.')
+            st.caption('Como aún tienes pocas sesiones de ' + ' y de '.join(_sin_hist) +
+                       ' (menos de 6), tus ritmos en esa disciplina parten de esta estimación y se '
+                       'irán ajustando con tus sesiones.')
 
     # Los ritmos MOSTRADOS progresan igual que en el plan (mismo factor de mejora),
     # así que cambian semana a semana en vez de quedarse fijos.
