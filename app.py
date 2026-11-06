@@ -1261,16 +1261,15 @@ MODELOS_DIR = 'salidas/modelos'
 
 
 @st.cache_resource(show_spinner=False)
-def cargar_modelos():
-    """Carga los modelos .joblib del notebook si están presentes.
-    Devuelve None si falta joblib/sklearn/xgboost o algún archivo.
-    """
-    try:
+def _cargar_modelos_cache():
+    """Carga los modelos .joblib del notebook. Si falta algo lanza una excepción: Streamlit no
+    guarda en caché los errores, así que al añadir los archivos faltantes se cargan sin reiniciar."""
+    if True:
         import joblib
         req = ['xgb_run2cyc.joblib', 'xgb_cyc2run.joblib', 'preprocesadores.joblib']
         paths = {f: os.path.join(MODELOS_DIR, f) for f in req}
         if not all(os.path.exists(p) for p in paths.values()):
-            return None
+            raise FileNotFoundError('faltan modelos en ' + MODELOS_DIR)
         modelos = {
             'run2cyc': joblib.load(paths['xgb_run2cyc.joblib']),
             'cyc2run': joblib.load(paths['xgb_cyc2run.joblib']),
@@ -1286,6 +1285,12 @@ def cargar_modelos():
                 m.load_model(ruta)
                 modelos[clave] = m
         return modelos
+
+
+def cargar_modelos():
+    """Modelos del TFM o None si no están disponibles (sin guardar el fallo en caché)."""
+    try:
+        return _cargar_modelos_cache()
     except Exception:
         return None
 
@@ -1473,6 +1478,7 @@ def inferir_con_modelos(modelos, feats):
                     comb, w = v * 0.85, 0.0
                 out['bici_cons_kmh'] = comb            # modelo combinado con las sesiones propias
                 out['bici_peso_propio'] = w
+                out['bici_n_validas'] = _entero(feats.get('n_bici'))
     except Exception:
         pass
     try:
@@ -1491,6 +1497,7 @@ def inferir_con_modelos(modelos, feats):
                     comb, w = max(v - 0.5, 5.0), 0.0
                 out['run_cons_kmh'] = max(comb, 5.0)   # modelo combinado con las sesiones propias
                 out['run_peso_propio'] = w
+                out['run_n_validas'] = _entero(feats.get('n_run'))
     except Exception:
         pass
     return out
@@ -3497,6 +3504,17 @@ with tab_info:
         elif _em_estado == 'sin_archivos':
             st.caption(f"⚠️ Modelos inactivos: {_em_msg}. Coloca la carpeta `salidas/` "
                        "(con `modelos/`) junto a `app.py`.")
+        if _em_estado == 'activo' and (infer.get('bici_peso_propio') is not None
+                                       or infer.get('run_peso_propio') is not None):
+            _lin = []
+            for _nom, _k in (('Bici', 'bici'), ('Carrera', 'run')):
+                if infer.get(f'{_k}_peso_propio') is None:
+                    continue
+                _fmt = (lambda v: f'{v:.1f} km/h') if _k == 'bici' else pace_run
+                _lin.append(f"{_nom}: {infer[f'{_k}_n_validas']} sesiones válidas, peso de tus datos "
+                            f"{infer[f'{_k}_peso_propio'] * 100:.0f} % (solo modelo "
+                            f"{_fmt(infer[f'{_k}_modelo_kmh'])} → combinada {_fmt(infer[f'{_k}_cons_kmh'])})")
+            st.caption('🎯 Personalización con tus sesiones — ' + ' · '.join(_lin) + '.')
         _gem_ok = inicializar_gemini() is not None
         st.caption('🤖 Explicaciones IA (Gemini): **configurado** — el «¿Por qué este plan?» y el '
                    'ajuste del día se redactan en vivo.' if _gem_ok else
